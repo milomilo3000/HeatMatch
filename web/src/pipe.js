@@ -125,6 +125,19 @@ export function crossingText(link) {
   return `crosses ${link.xn} streets${names.length ? ` (${names.slice(0, 2).join(", ")})` : ""}`;
 }
 
+// One plain line for judges: where the pipe goes and what that takes.
+export function routeLine(link) {
+  const names = (link.xnames || []).map(tidy);
+  const ft = link.dist_m >= 1 ? `${Math.round(link.dist_m * 3.281)} ft` : null; // touching buildings: no length
+  if (link.tier === 1) return { icon: "▥", where: "Through the shared wall", ft, need: "no street work" };
+  if (!link.xn && link.tier <= 2) return { icon: "⇢", where: "Across the lot line", ft, need: "private easement, no street work" };
+  const n = link.xn || (link.tier >= 4 ? 2 : 1);
+  const where = names.length ? `Under ${names.slice(0, 2).join(" and ")}` : n > 1 ? `Under ${n} streets` : "Under the street";
+  const extra = [link.prot && "recently repaved", link.sub && "subway below", link.hwy && "highway"].filter(Boolean);
+  const need = `${n > 1 ? `${n} DOT street permits` : "needs a DOT street permit"}${extra.length ? ` · ${extra.join(", ")}` : ""}`;
+  return { icon: "⛏", where, ft, need };
+}
+
 export function routeHow(link) {
   const names = (link.xnames || []).map(tidy);
   if (link.xn && names.length) return `under ${names.slice(0, 2).join(" and ")}`;

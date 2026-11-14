@@ -1,17 +1,24 @@
-import React, { useMemo, useState } from "react";
-import HeatGrid from "./HeatGrid.jsx";
+import React, { useState } from "react";
 import PipeCard from "./PipeCard.jsx";
 import { pairEcon, gridVal, demandAt, srcKey, sourceLabel, fmt, FUEL_LABEL, MONTHS } from "./econ.js";
-import { ROUTE, crossingText } from "./pipe.js";
+import { ROUTE, crossingText, routeLine } from "./pipe.js";
+import { Savings } from "./ResultsPanel.jsx";
 
 const TIER_SCORE = { 1: 1, 2: 0.85, 3: 0.6, 4: 0.3 };
 
 const TIER_REASON = {
-  1: "Shared wall — easiest pipe run",
-  2: "Same block — short private run",
-  3: "Across a street — needs a city permit",
-  4: "Farther apart — longer, costlier pipe",
+  1: { text: "Shares a wall: the easiest pipe run", tone: "good" },
+  2: { text: "Same block: no street to dig up", tone: "good" },
+  3: { text: "Crosses one street: needs a city permit", tone: "ok" },
+  4: { text: "Crosses several streets: costlier pipe", tone: "bad" },
 };
+
+const COST_GROUPS = [
+  ["pipe", "Pipe & street work"],
+  ["equip", "Heat pump & equipment"],
+  ["hookup", "Hookup inside the building"],
+  ["soft", "Engineering & contingency"],
+];
 
 const routeNote = (pair) => `${crossingText(pair).replace(/^./, (c) => c.toUpperCase())}. ${ROUTE[pair.tier].permit}`;
 
@@ -34,14 +41,19 @@ export function heatMatchScore(pair, e, mode) {
   const pay = pb == null ? 0 : pb <= 10 ? 1 : pb <= 20 ? 0.7 : pb <= 30 ? 0.4 : 0.15;
   const score = Math.round(100 * (0.3 * coin + 0.3 * cov + 0.2 * tier + 0.2 * pay));
   const label = score >= 70 ? "Strong" : score >= 45 ? "Worth a look" : "Weak";
+  const pct = (x) => fmt.pct(x);
   const reasons = [
-    coin >= 0.6 ? `Good timing fit (${fmt.pct(coin)})` : coin >= 0.35 ? `Uneven timing fit (${fmt.pct(coin)})` : `Poor timing fit (${fmt.pct(coin)})`,
-    cov >= 0.6 ? `Covers most heat need (${fmt.pct(cov)})` : cov >= 0.3 ? `Covers some heat need (${fmt.pct(cov)})` : `Covers little heat need (${fmt.pct(cov)})`,
+    coin >= 0.6 ? { text: `Heat is there when it's needed (${pct(coin)} of hours)`, tone: "good" }
+      : coin >= 0.35 ? { text: `Heat is there some of the time it's needed (${pct(coin)})`, tone: "ok" }
+      : { text: `Heat rarely lines up with need (${pct(coin)})`, tone: "bad" },
+    cov >= 0.6 ? { text: `Covers most of its heat need (${pct(cov)})`, tone: "good" }
+      : cov >= 0.3 ? { text: `Covers some of its heat need (${pct(cov)})`, tone: "ok" }
+      : { text: `Covers little of its heat need (${pct(cov)})`, tone: "bad" },
     TIER_REASON[pair.tier] || TIER_REASON[4],
-    pb == null || pb > 30 ? "Long payback weakens the case"
-      : pb <= 12 ? "Payback looks competitive"
-      : pb <= 20 ? "Payback is moderate"
-      : "Payback is on the long side",
+    pb == null ? { text: "Doesn't pay back on savings alone", tone: "bad" }
+      : pb <= 12 ? { text: "Pays for itself fairly quickly", tone: "good" }
+      : pb <= 20 ? { text: "Moderate payback time", tone: "ok" }
+      : { text: "Slow to pay back (20+ years)", tone: "bad" },
   ];
   return { score, label, reasons };
 }
@@ -102,35 +114,20 @@ Estimated installed cost is $${(a.installed_cost_range_usd[0] / 1e6).toFixed(1)}
 
 export default function PairDrawer({
   data, grids, pair, filters, setFilters, hour, month, onClose, onBack, focusEntry, embedded,
-  quote, setQuote,
 }) {
   const A = data.summary.assumptions;
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
-  const [elecPrice, setElecPrice] = useState(A.elec_usd_per_kwh);
-  const [pipeMult, setPipeMult] = useState(1);
   const [letter, setLetter] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
   // LL97 penalty savings always included in screening numbers
-  const opts = { mode: filters.mode, storage: filters.storage, elecPrice, pipeMult, includeLL97: true };
-  const e = pairEcon(pair, k, A, { ...opts, quote });
+  const opts = { mode: filters.mode, storage: filters.storage, includeLL97: true };
+  const e = pairEcon(pair, k, A, opts);
   const before = pair._owner && data.raw ? pairEcon(pair._orig, data.raw.buildings.get(pair.k), A, opts) : null;
   const match = heatMatchScore(pair, e, filters.mode);
-  const coverage = pair[`coverage_${filters.mode}`] || 0;
-  const gs = grids?.[pair.s], gk = grids?.[pair.k];
   const partner = focusEntry ? (focusEntry.id === s.id ? k : s) : null;
   const youGive = focusEntry ? focusEntry.id === s.id : null;
-
-  const g = useMemo(() => {
-    if (!gs || !gk) return null;
-    const src = [], dem = [], matchVals = [];
-    for (let i = 0; i < 288; i++) {
-      const a = gridVal(gs, srcKey(pair.track), i), d = demandAt(gk, filters.mode, i);
-      src.push(a); dem.push(d); matchVals.push(Math.min(a, d));
-    }
-    return { src, dem, match: matchVals, srcMax: Math.max(...src), demMax: Math.max(...dem) };
-  }, [gs, gk, filters.mode, pair.track]);
 
   async function draft() {
     setBusy(true); setLetter(""); setNote("");
@@ -164,10 +161,21 @@ export default function PairDrawer({
     a.click();
   }
 
-  const modeLbl = filters.mode === "dhw" ? "hot water" : "hot water + space heat";
-  const energyNet = e.energy;
   const tone = match.label === "Strong" ? "hi" : match.label === "Worth a look" ? "mid" : "lo";
-  const sourceRole = sourceLabel(s, pair.track);
+  const other = partner || k;
+  const otherRole = (partner ? !youGive : false) ? sourceLabel(other, pair.track) : (other.type || FUEL_LABEL[other.fuel] || "Needs heat");
+  const route = routeLine(pair);
+  const breakdown = [
+    { label: `${FUEL_LABEL[k.fuel] || "Fuel"} saved`, v: e.fuelUsd },
+    { label: "Heat-pump electricity", v: -e.elecUsd },
+    { label: "Cooling-tower water saved", v: e.waterUsd },
+    { label: e.nycha ? "LL97 fines avoided (NYCHA: n/a)" : "LL97 fines avoided", v: e.ll97 },
+  ];
+  const signed = (v) => <span className={v >= 0 ? "pos" : "neg"}>{v >= 0 ? "+" : "−"}{fmt.usd(Math.abs(v))}</span>;
+  const groups = COST_GROUPS.map(([key, label]) => ({
+    label, v: e.cost.items.filter((it) => (it.group || "soft") === key).reduce((t, it) => t + it.v[1], 0),
+  })).filter((x) => x.v > 0);
+  const MARK = { good: "✓", ok: "~", bad: "✗" };
 
   return (
     <div className={`drawer compact-drawer ${embedded ? "drawer-embedded" : ""}`}>
@@ -180,73 +188,47 @@ export default function PairDrawer({
         <button className="close" onClick={onClose} aria-label="Close">×</button>
       </header>
 
-      {focusEntry && partner && (
-        <div className="block pair-context">
-          <div className="eyebrow">Your building</div>
-          <div className="who-sm">{focusEntry.name}</div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {youGive
-              ? sourceRole
-              : (focusEntry.type || FUEL_LABEL[k.fuel] || "Needs heat")}
+      <div className="block pair-title">
+        <div className="pt-row">
+          <div>
+            {!focusEntry && <div className="muted pt-from">{s.name} →</div>}
+            <h3>{other.name}</h3>
+            <div className="muted pt-sub">{otherRole} · {route.ft ? `${route.ft} away` : "next door"}</div>
           </div>
-          <div className="pair-arrow">→</div>
-          <div className="eyebrow">Partner</div>
-          <div className="who-sm">{partner.name}</div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {youGive
-              ? (partner.type || FUEL_LABEL[partner.fuel] || "Needs heat")
-              : sourceLabel(partner, pair.track)}
-          </div>
-        </div>
-      )}
-
-      <div className="block score-block">
-        <div className="eyebrow">Heat match score</div>
-        <div className="score-row">
-          <div className={`score-ring s-${tone}`}>
+          <span className={`match-score s-${tone}`} title={`Heat match score ${match.score}/100 · ${match.label}`}>
             <b>{match.score}</b>
-            <span>/100</span>
-          </div>
-          <div className="score-aside">
-            <div className="score-label">{match.label}</div>
-            <ul className="score-reasons">
-              {match.reasons.map((r) => <li key={r}>{r}</li>)}
-            </ul>
-          </div>
+          </span>
+        </div>
+        <div className="why">
+          <div className="why-head">Why {match.score}: <b className={`rec-${tone}`}>{match.label.toLowerCase()}</b></div>
+          {match.reasons.map((r) => (
+            <div key={r.text} className={`why-row t-${r.tone}`}><i>{MARK[r.tone]}</i>{r.text}</div>
+          ))}
         </div>
       </div>
 
       <div className="block">
-        <div className="eyebrow">Financial outlook</div>
-        <div className="kpis two">
-          <div className="kpi highlight"><div className="v">{fmt.yrRange(e.paybackLow, e.paybackHigh)}</div><div className="l">payback</div></div>
-          <div className="kpi highlight"><div className="v">{fmt.usdRange(e.capexLow, e.capexHigh)}</div><div className="l">install cost</div></div>
-          <div className="kpi"><div className="v" style={{ color: "var(--heat)" }}>{fmt.usd(e.value)}</div><div className="l">benefit / year</div></div>
-          <div className="kpi">
-            <div className={`v ${energyNet >= 0 ? "pos" : "neg"}`}>{fmt.usd(energyNet)}</div>
-            <div className="l">{energyNet >= 0 ? "net energy save / yr" : "net energy cost / yr"}</div>
-          </div>
+        <div className="kpis">
+          <div className="kpi"><div className="v">{fmt.usdRange(e.capexLow, e.capexHigh)}</div><div className="l">est. cost</div></div>
+          <div className="kpi"><div className="v"><Savings value={e.value} suffix="" /></div><div className="l">est. savings / yr</div></div>
+          <div className="kpi"><div className="v pos">{fmt.int(e.tco2e)} t</div><div className="l">CO₂ avoided / yr</div></div>
         </div>
+        <div className="note" style={{ marginTop: 6 }}>Screening estimates from public data, not quotes.</div>
         {before && (
           <div className="before-after">
             <span className="conf m">Using your data</span> Public-data model said {fmt.usdRange(before.capexLow, before.capexHigh)},
-            {" "}{fmt.yrRange(before.paybackLow, before.paybackHigh)} payback, {fmt.usd(before.value)}/yr.
+            {" "}{fmt.usd(before.value)}/yr savings.
           </div>
         )}
       </div>
 
       <div className="block">
-        <div className="eyebrow">Environmental impact</div>
-        <div className="kpis two">
-          <div className="kpi highlight">
-            <div className="v" style={{ color: "var(--good)" }}>{fmt.int(e.tco2e)} t</div>
-            <div className="l">CO₂ avoided / year</div>
-          </div>
-          <div className="kpi">
-            <div className="v">{fmt.big(e.mmbtu)}</div>
-            <div className="l">heat reused / yr</div>
-          </div>
+        <h4>How it connects</h4>
+        <div className="route-line">
+          <span className="ri" aria-hidden="true">{route.icon}</span>
+          <span><b>{route.where}</b>{route.ft && ` · ${route.ft}`}<br /><span className="muted">{route.need}</span></span>
         </div>
+        <PipeCard compact pair={pair} s={s} k={k} A={A} mode={filters.mode} storage={filters.storage} />
       </div>
 
       <div className="block cta-block">
@@ -266,62 +248,23 @@ export default function PairDrawer({
       </div>
 
       <details className="acc">
-        <summary>Technical details</summary>
+        <summary>Savings &amp; cost breakdown</summary>
         <div className="block">
-          <h4>How the pipe works</h4>
-          <PipeCard pair={pair} s={s} k={k} A={A} mode={filters.mode} storage={filters.storage} pipeMult={pipeMult} />
-        </div>
-        <div className="block">
-          <h4>When heat lines up</h4>
-          {g ? (
-            <div className="grids">
-              <div>
-                <div className="gridlbl"><span>Available</span><span>{fmt.big(pair.avail / 1000)}</span></div>
-                <HeatGrid values={g.src} vmax={g.srcMax} palette="heat" month={month} hour={hour} />
-              </div>
-              <div>
-                <div className="gridlbl"><span>Needed ({modeLbl})</span><span>{fmt.big(pair[`demand_${filters.mode}`] / 1000)}</span></div>
-                <HeatGrid values={g.dem} vmax={g.demMax} palette="cold" month={month} hour={hour} />
-              </div>
-              <div>
-                <div className="gridlbl"><span>Matched</span><span>{fmt.pct(coverage)} covered</span></div>
-                <HeatGrid values={g.match} vmax={g.demMax} palette="match" month={month} hour={hour} />
-              </div>
-            </div>
-          ) : <div className="note">Loading hourly profiles…</div>}
-        </div>
-        <div className="block">
-          <h4>Cost line items</h4>
-          {e.cost.items.map((it) => (
-            <div key={it.label} className="econ-row">
-              <span>{it.label}{it.note && <em className="note"> {it.note}</em>}</span>
-              <span>{fmt.usd(it.v[1])}</span>
-            </div>
+          <h4>Savings per year</h4>
+          {breakdown.map((r) => (
+            <div key={r.label} className="econ-row"><span>{r.label}</span>{signed(r.v)}</div>
           ))}
-          <div className="econ-row total"><span>{e.cost.quoted ? "Your quote" : "Total (base)"}</span><span>{fmt.usd(e.capex)}</span></div>
-          {setQuote && (
-            <label className="quote">
-              Have a contractor quote? It replaces the estimate (saved in this browser only).
-              <span>
-                $ <input type="number" min="0" step="10000" value={quote ?? ""} placeholder="e.g. 1800000"
-                  onChange={(ev) => setQuote(ev.target.value === "" ? null : +ev.target.value)} />
-                {quote > 0 && <button type="button" onClick={() => setQuote(null)}>remove</button>}
-              </span>
-            </label>
-          )}
-          <div className="row" style={{ marginTop: 12 }}><span>Electricity price</span><b>${elecPrice.toFixed(2)}/kWh</b></div>
-          <input type="range" min={0.1} max={0.3} step={0.01} value={elecPrice} onChange={(ev) => setElecPrice(+ev.target.value)} />
-          <div className="row"><span>Pipe cost</span><b>{pipeMult.toFixed(1)}×</b></div>
-          <input type="range" min={0.5} max={2.5} step={0.1} value={pipeMult} onChange={(ev) => setPipeMult(+ev.target.value)} />
-          <div className="row"><span>Storage</span></div>
-          <div className="seg">
-            {A.storage_hours.map((h) => (
-              <button key={h} type="button" className={filters.storage === h ? "on" : ""} onClick={() => setFilters((f) => ({ ...f, storage: h }))}>
-                {h === 0 ? "None" : `${h} h`}
-              </button>
-            ))}
+          <div className="econ-row total"><span>Net savings</span>{signed(e.value)}</div>
+        </div>
+        <div className="block">
+          <h4>Installed cost (estimate)</h4>
+          {groups.map((x) => (
+            <div key={x.label} className="econ-row"><span>{x.label}</span><span>{fmt.usd(x.v)}</span></div>
+          ))}
+          <div className="econ-row total">
+            <span>Total</span>
+            <span>{fmt.usdRange(e.capexLow, e.capexHigh)}</span>
           </div>
-          <div className="note" style={{ marginTop: 8 }}>Screening from public LL84 / NREL data — not an engineering quote.</div>
         </div>
       </details>
     </div>

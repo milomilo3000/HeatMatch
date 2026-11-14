@@ -94,7 +94,6 @@ Demo keys: **c** opens NYCHA Fulton Houses (Con Ed's Chelsea pilot site) in the 
    - **Heat pumps** at $900–2,100 per kW of heat (published data-center heat-recovery studies use
      EUR 250k–1M per MW), source tie-in, building hookup (per apartment for steam-heated
      buildings), storage, engineering (~30%) and contingency (~25%).
-   - An owner's **contractor quote** replaces the estimate for that link.
 
    NYCHA buildings follow LL97 Article 321, so no per-ton penalty value is counted for them.
    Physics and price constants are in `pipeline/config.py`.

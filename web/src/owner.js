@@ -5,7 +5,6 @@ import { gridVal, demandAt, srcKey } from "./econ.js";
 
 const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const KEY = "heatmatch.owner.v1";
-const QUOTE_KEY = "heatmatch.quotes.v1";
 
 // kBtu per unit
 export const UNITS = {
@@ -31,8 +30,6 @@ function write(key, value) {
 }
 export const loadOwner = () => read(KEY);
 export const saveOwner = (records) => write(KEY, records);
-export const loadQuotes = () => read(QUOTE_KEY);
-export const saveQuotes = (quotes) => write(QUOTE_KEY, quotes);
 
 // --- turning a record into grids --------------------------------------------------
 

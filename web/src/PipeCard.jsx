@@ -3,16 +3,15 @@ import { pipeSpec, ROUTE, LOOP, routeHow } from "./pipe.js";
 import { fmt, pipeCost } from "./econ.js";
 
 // "How this pipe works": a schematic plus the four physical steps, with this pair's numbers.
-export default function PipeCard({ pair, s, k, A, mode, storage, pipeMult }) {
+// compact: diagram only (the partner drawer); otherwise the full card with steps and specs.
+export default function PipeCard({ pair, s, k, A, mode, storage, pipeMult = 1, compact = false }) {
   const p = pipeSpec(pair, A, { mode, storage, pipeMult });
   const route = { ...ROUTE[pair.tier], how: routeHow(pair) };
   const cost = pipeCost(pair, p.deliveredKw, A, pipeMult);
   const use = mode === "dhw" ? "hot-water tank" : "hot-water tank + heating loop";
   const short = (t, n = 22) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
 
-  return (
-    <div className="block">
-      <h4>How this pipe works</h4>
+  const svg = (
       <svg viewBox="0 0 380 150" className="pipe-svg" role="img" aria-label="Pipe schematic">
         {/* source building */}
         <rect x="6" y="18" width="110" height="114" rx="8" className="pv-box pv-src" />
@@ -28,7 +27,7 @@ export default function PipeCard({ pair, s, k, A, mode, storage, pipeMult }) {
         <line x1="264" y1="112" x2="116" y2="112" className="pv-return" />
         <text x="190" y="88" className="pv-small pv-t-src">{LOOP.supplyF}°F →</text>
         <text x="190" y="127" className="pv-small pv-t-snk">← {LOOP.returnF}°F</text>
-        <text x="190" y="60" className="pv-big">{Math.round(p.lengthM)} m</text>
+        <text x="190" y="60" className="pv-big">{Math.round(p.lengthM * 3.281)} ft</text>
         <text x="190" y="74" className="pv-small">2 × {p.nominalIn}″ insulated pipes</text>
 
         {/* sink building */}
@@ -40,7 +39,13 @@ export default function PipeCard({ pair, s, k, A, mode, storage, pipeMult }) {
         <text x="319" y="66" className="pv-small">{mode === "dhw" ? "hot-water tank" : "tank + heating"}</text>
         <line x1="319" y1="88" x2="319" y2="76" className="pv-link" />
       </svg>
+  );
+  if (compact) return svg;
 
+  return (
+    <div className="block">
+      <h4>How this pipe works</h4>
+      {svg}
       <ol className="pipe-steps">
         <li>
           <b>Capture.</b> A plate heat exchanger taps {s.name}'s condenser-water loop: the heat it now sends

@@ -3,7 +3,7 @@
 import { sizePipe } from "./pipe.js";
 
 // Installed-cost assumptions, [low, base, high]. Screening values, shown to users in the
-// "Cost breakdown & assumptions" section; replace with quotes for any real project.
+// "Savings & cost breakdown" section; replace with real quotes for any real project.
 export const COST = {
   tiePerKw: [200, 300, 500], // source tie-in: plate heat exchanger, pumps, controls, per kW of heat carried
   dhwPerKw: [200, 300, 500], // sink hot-water integration (tanks, piping), per kW delivered
@@ -51,6 +51,7 @@ export function pipeCost(link, peakKw, A, pipeMult = 1) {
   const items = [{
     label: `Pipe on private property (${Math.round(privateFt)} ft of ${nominalIn}″ supply + return)`,
     v: lohi((i) => privateFt * perFt * PIPE.privateBand[i]),
+    group: "pipe",
   }];
   if (xn) {
     const notes = [];
@@ -62,10 +63,12 @@ export function pipeCost(link, peakKw, A, pipeMult = 1) {
       label: `Pipe under ${namesOf(link) || (xn > 1 ? `${xn} streets` : "the street")} (${Math.round(streetFt)} ft in the street)`,
       v: lohi((i) => streetFt * perFt * PIPE.streetMult[i] * prot),
       note: notes.join(" ") || null,
+      group: "pipe",
     });
     items.push({
       label: `Street permits, traffic control, utility mark-out (${xn} crossing${xn > 1 ? "s" : ""})`,
       v: lohi((i) => xn * PIPE.crossingFixed[i]),
+      group: "pipe",
     });
   }
   const total = lohi((i) => items.reduce((s, x) => s + x.v[i], 0));
@@ -80,8 +83,8 @@ export function costRange({ pipeItems, peakKw, sinks, demandKbtuYr, storageHrs, 
   const lohi = (f) => [0, 1, 2].map(f);
   const items = [
     ...pipeItems,
-    { label: "Heat pumps (sized for peak heat delivered)", v: lohi((i) => peakKw * HP_USD_PER_KW[i]) },
-    { label: "Source tie-in (heat exchanger, pumps)", v: lohi((i) => peakKw * (1 - 1 / A.hp_cop) * COST.tiePerKw[i]) },
+    { label: "Heat pumps (sized for peak heat delivered)", v: lohi((i) => peakKw * HP_USD_PER_KW[i]), group: "equip" },
+    { label: "Source tie-in (heat exchanger, pumps)", v: lohi((i) => peakKw * (1 - 1 / A.hp_cop) * COST.tiePerKw[i]), group: "equip" },
     {
       label: mode === "dhw" ? "Hot-water hookup at the user" : "Heating hookup at the user",
       v: lohi((i) => sinks.reduce((s, k) => {
@@ -91,19 +94,20 @@ export function costRange({ pipeItems, peakKw, sinks, demandKbtuYr, storageHrs, 
       }, 0)),
       note: mode === "all" && sinks.some((k) => k.fuel === "steam" && k.units > 0)
         ? "Steam-heated buildings need per-apartment conversion to low-temperature heat" : null,
+      group: "hookup",
     },
   ];
   if (storageHrs > 0)
-    items.push({ label: `Storage tank (${storageHrs} h)`, v: lohi((i) => (demandKbtuYr / 8760 / 3.412) * storageHrs * COST.tankPerKwh[i]) });
+    items.push({ label: `Storage tank (${storageHrs} h)`, v: lohi((i) => (demandKbtuYr / 8760 / 3.412) * storageHrs * COST.tankPerKwh[i]), group: "equip" });
   const hard = lohi((i) => items.reduce((s, x) => s + x.v[i], 0));
-  items.push({ label: "Engineering, permits, management", v: lohi((i) => hard[i] * COST.soft[i]) });
-  items.push({ label: "Contingency", v: lohi((i) => hard[i] * COST.contingency[i]) });
+  items.push({ label: "Engineering, permits, management", v: lohi((i) => hard[i] * COST.soft[i]), group: "soft" });
+  items.push({ label: "Contingency", v: lohi((i) => hard[i] * COST.contingency[i]), group: "soft" });
   const total = lohi((i) => items.reduce((s, x) => s + x.v[i], 0));
   return { items, low: total[0], base: total[1], high: total[2] };
 }
 
 export function pairEcon(pair, sink, A, opts) {
-  const { mode = "all", storage = 0, elecPrice = A.elec_usd_per_kwh, pipeMult = 1, includeLL97 = true, quote } = opts;
+  const { mode = "all", storage = 0, elecPrice = A.elec_usd_per_kwh, pipeMult = 1, includeLL97 = true } = opts;
   const m = pair[`matched_${mode}_${storage}`] || 0; // kBtu/yr useful heat delivered
   const peakKw = (pair[`peak_${mode}_${storage}`] || 0) / 3.412;
   const hpKwh = m / A.hp_cop / 3.412;
@@ -122,8 +126,6 @@ export function pairEcon(pair, sink, A, opts) {
     pipeItems: pipe.items, peakKw, A, mode, storageHrs: storage, demandKbtuYr: pair[`demand_${mode}`] || 0,
     sinks: [{ fuel: sink.fuel, units: sink.units || 0, peakKw }],
   });
-  // an owner's contractor quote replaces the modeled total (shown with a +/-10% band)
-  if (quote > 0) Object.assign(cost, { low: quote * 0.9, base: quote, high: quote * 1.1, quoted: true });
   const energy = fuelUsd - elecUsd + waterUsd;
   const value = energy + (includeLL97 ? ll97 : 0);
   const pb = (c) => (value > 0 ? c / value : null);

@@ -3,14 +3,13 @@ import MapView, { INITIAL } from "./MapView.jsx";
 import Sidebar from "./Sidebar.jsx";
 import PairDrawer, { heatMatchScore } from "./PairDrawer.jsx";
 import ChainDrawer from "./ChainDrawer.jsx";
-import TimeBar from "./TimeBar.jsx";
 import SearchBar from "./SearchBar.jsx";
 import ResultsPanel from "./ResultsPanel.jsx";
 import OwnerDataPanel from "./OwnerDataPanel.jsx";
 import AssistantPanel from "./AssistantPanel.jsx";
 import { buildIndex, findChains } from "./chain.js";
 import { loadIndex, nearbyOpposite, searchIndex } from "./search.js";
-import { applyOwner, loadOwner, saveOwner, loadQuotes, saveQuotes } from "./owner.js";
+import { applyOwner, loadOwner, saveOwner } from "./owner.js";
 import { getIntent, matchesTypes, sortRows, describeFilter, sayCost, sayPayback, TYPE_LABEL, SORT_LABEL } from "./intent.js";
 import { filterPairs, portfolio, computeFlowMax, pairEcon, fmt } from "./econ.js";
 
@@ -42,7 +41,6 @@ export default function App() {
   const [rawGrids, setGrids] = useState(null);
   const [error, setError] = useState(null);
   const [owner, setOwner] = useState(loadOwner);
-  const [quotes, setQuotes] = useState(loadQuotes);
   const [ownerOpen, setOwnerOpen] = useState(false);
   const { data, grids } = useMemo(() => applyOwner(rawData, rawGrids, owner), [rawData, rawGrids, owner]);
 
@@ -60,6 +58,7 @@ export default function App() {
   const searchMaxDist = 150;
   const [nearby, setNearby] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [hoverId, setHoverId] = useState(null); // candidate building whose map label is shown
   const [hour, setHour] = useState(19);
   const [month, setMonth] = useState(0);
   const [chains, setChains] = useState([]);
@@ -107,7 +106,7 @@ export default function App() {
       .filter((p) => (p.s === focus.id || p.k === focus.id) && p.dist_m <= maxDist)
       .map((p) => {
         const youAreSource = p.s === focus.id;
-        const e = pairEcon(p, data.buildings.get(p.k), A, { ...opts, quote: quotes[p.id] });
+        const e = pairEcon(p, data.buildings.get(p.k), A, opts);
         return {
           p,
           youAreSource,
@@ -119,7 +118,7 @@ export default function App() {
       .filter((r) => !intent || (matchesTypes(r.other, intent.partner_types) && (!intent.no_street_crossing || r.p.tier <= 2)));
     if (intent) return sortRows(rows, intent.sort);
     return rows.sort((a, b) => b.match.score - a.match.score || (a.e.payback ?? 1e9) - (b.e.payback ?? 1e9));
-  }, [data, A, tabPairs, focus, searchMaxDist, filters.mode, filters.storage, intent, quotes]);
+  }, [data, A, tabPairs, focus, searchMaxDist, filters.mode, filters.storage, intent]);
 
   const partnerPairs = useMemo(() => partnerRows.map((r) => r.p), [partnerRows]);
   const otherTab = tab === "dc" ? "commercial" : "dc";
@@ -174,9 +173,6 @@ export default function App() {
   function applyOwnerRecord(id, rec) {
     setOwner((cur) => { const next = { ...cur }; if (rec) next[id] = rec; else delete next[id]; saveOwner(next); return next; });
     setOwnerOpen(false);
-  }
-  function setQuote(pairId, value) {
-    setQuotes((cur) => { const next = { ...cur }; if (value > 0) next[pairId] = value; else delete next[pairId]; saveQuotes(next); return next; });
   }
 
   async function ask(text) {
@@ -291,7 +287,7 @@ export default function App() {
 
   const P = data.summary.portfolio;
   const hint = tab === "dc"
-    ? <>{fmt.int(P.dc.sources_with_partner)} NYC data centers have a neighbor that could use their waste heat. Try “111 Eighth Avenue” or press <kbd>c</kbd></>
+    ? <>{fmt.int(P.dc.sources_with_partner)} NYC data centers have a neighbor that could use their waste heat. Try “111 Eighth Avenue”</>
     : <>Hotels, grocery stores, offices and hospitals. Estimate-based matches. Try “1515 Broadway”</>;
 
   return (
@@ -310,6 +306,8 @@ export default function App() {
           chain={searchMode ? null : selectedChain}
           onSelect={selectPair}
           onPickBuilding={(id) => pickEntry(entryFromBuilding(data.buildings.get(id)))}
+          hoverId={hoverId}
+          onHoverBuilding={setHoverId}
           hour={hour}
           month={month}
           heatMode={filters.mode}
@@ -324,7 +322,7 @@ export default function App() {
           <div className="tabs" role="tablist" aria-label="Analysis">
             <button type="button" role="tab" aria-selected={tab === "dc"} className={tab === "dc" ? "on" : ""} onClick={() => switchTab("dc")}>Data centers</button>
             <button type="button" role="tab" aria-selected={tab === "commercial"} className={tab === "commercial" ? "on" : ""} onClick={() => switchTab("commercial")}>
-              Commercial <span className="est">est.</span>
+              Commercial
             </button>
           </div>
         </div>
@@ -350,17 +348,6 @@ export default function App() {
       {searchMode && !focus && !askOpen && (
         <div className="empty-tip compact">
           <p>Search a building to see nearby partners worth contacting.</p>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={() => {
-              const fultonId = data.pairById.get(data.summary.bookmarks.chelsea[0])?.k;
-              const b = data.buildings.get(fultonId);
-              if (b) { setTab("dc"); pickEntry(entryFromBuilding(b)); }
-            }}
-          >
-            Try Chelsea / Fulton example
-          </button>
           <div className="empty-legend">
             <span><i className="lg-heat" /> Gives heat</span>
             <span><i className="lg-cold" /> Needs heat</span>
@@ -386,6 +373,7 @@ export default function App() {
           sortLabel={intent ? SORT_LABEL[intent.sort] : null}
           onClearIntent={() => setIntent(null)}
           onOwnerData={() => setOwnerOpen(true)}
+          onHoverPartner={setHoverId}
         />
       )}
 
@@ -401,8 +389,6 @@ export default function App() {
           month={month}
           focusEntry={focus}
           embedded
-          quote={quotes[selected.id]}
-          setQuote={(v) => setQuote(selected.id, v)}
           onBack={() => setSelectedId(null)}
           onClose={clearFocus}
         />
@@ -448,8 +434,6 @@ export default function App() {
           setFilters={setFilters}
           hour={hour}
           month={month}
-          quote={quotes[selected.id]}
-          setQuote={(v) => setQuote(selected.id, v)}
           onClose={() => setSelectedId(null)}
         />
       )}
@@ -475,10 +459,6 @@ export default function App() {
         </div>
       )}
 
-      {!searchMode && (
-        <TimeBar hour={hour} setHour={setHour} month={month} setMonth={setMonth} pairs={filtered}
-          grids={grids} mode={filters.mode} flowMax={flowMax} />
-      )}
     </div>
   );
 }

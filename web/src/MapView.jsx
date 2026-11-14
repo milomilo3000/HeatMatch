@@ -4,7 +4,7 @@ import maplibregl from "maplibre-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { PolygonLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
-import { demandAt, flowAt, KIND_LABEL, FUEL_LABEL } from "./econ.js";
+import { KIND_LABEL, FUEL_LABEL } from "./econ.js";
 import { nearestWalls, midpoint, footprintRadius } from "./pipe.js";
 
 function shortLabel(name, max = 20) {
@@ -72,6 +72,7 @@ function arcPath(s, k) {
 
 export default function MapView({
   mapRef, data, grids, pairs, mode, tab, focus, partners, selected, chain, onSelect, onPickBuilding,
+  hoverId, onHoverBuilding,
   hour, month, heatMode, storage, flowMax,
 }) {
   const [time, setTime] = useState(0);
@@ -94,7 +95,8 @@ export default function MapView({
 
   const get = (id) => data.buildings.get(id);
   const idx = month * 24 + hour;
-  const flowNow = (p) => (grids ? flowAt(p, grids, heatMode, idx) / (flowMax.get(p.id) || 1) : 0.6);
+  // annual strength of a match (share of the user's heat need it covers), not the hour: investors look at the year
+  const flowNow = (p) => Math.max(0.15, Math.min(1, p[`coverage_${heatMode}`] || 0));
 
   const active = useMemo(() => {
     const ids = new Set();
@@ -192,7 +194,9 @@ export default function MapView({
         const ang = (it.idx * 2.2) % 6.28;
         offset = [Math.round(Math.cos(ang) * 42), Math.round(Math.sin(ang) * 28) - 12];
       }
-      return { pos: [b.lon, b.lat, (b.height_m || 10) + 10], text: it.text, rgb: it.rgb, big: it.big, offset };
+      // search candidates are labeled only while hovered (on the map or in the list)
+      const hoverOnly = searchMode && !selected && it.side === "partner";
+      return { id: it.id, hoverOnly, pos: [b.lon, b.lat, (b.height_m || 10) + 10], text: it.text, rgb: it.rgb, big: it.big, offset };
     });
     if (selected && !chain)
       segs.forEach((g) => labels.push({
@@ -208,6 +212,8 @@ export default function MapView({
   }, [searchMode, focus, focusId, partners, selected, chain, data, tab]);
 
   const anyHl = hl.items.length > 0;
+  const labels = useMemo(() => hl.labels.filter((l) => !l.hoverOnly || l.id === hoverId), [hl, hoverId]);
+  const onHover = ({ object }) => onHoverBuilding?.(object?.b.id ?? null);
   const basePolys = useMemo(() => (anyHl ? polys.filter((d) => !hl.color.has(d.b.id)) : polys), [polys, hl, anyHl]);
   const hlPolys = useMemo(() => (anyHl ? polys.filter((d) => hl.color.has(d.b.id)) : []), [polys, hl, anyHl]);
 
@@ -224,13 +230,7 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown, data]);
 
-  const intensity = (b) => {
-    const g = grids?.[b.id];
-    if (!g) return 0.7;
-    if (isSrc(b) && g[srcGrid]) return g[srcGrid][idx] / 999;
-    if (g.dhw) return demandAt(g, heatMode, idx) / ((g.dhw_max || 0) + (heatMode === "all" ? g.space_max || 0 : 0) || 1);
-    return 0.5;
-  };
+  const intensity = () => 0.8; // fixed: the citywide map shows who gives / needs heat, not a time of day
 
   // Search: grey city (highlights handled separately). Citywide: sources orange, users blue.
   const buildingColor = ({ b }) => {
@@ -269,6 +269,7 @@ export default function MapView({
       pickable: true,
       autoHighlight: true,
       highlightColor: [255, 255, 255, 70],
+      onHover,
       updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids, tab] },
       onClick: onBuildingClick,
     }),
@@ -283,6 +284,7 @@ export default function MapView({
       getLineColor: [255, 255, 255, 235],
       material: { ambient: 0.75, diffuse: 0.5, shininess: 40 },
       pickable: true,
+      onHover,
       onClick: onBuildingClick,
       updateTriggers: { getFillColor: [hl] },
     }),
@@ -398,11 +400,11 @@ export default function MapView({
       parameters: ON_TOP,
     }),
 
-    (hl.labels.length > 0 || (searchMode && focus && focusId == null)) && new TextLayer({
+    (labels.length > 0 || (searchMode && focus && focusId == null)) && new TextLayer({
       id: "labels",
       data: focusId == null && searchMode && focus
         ? [{ pos: [focus.lon, focus.lat, 12], offset: [0, -24], text: focus.name, rgb: [235, 238, 245] }]
-        : hl.labels,
+        : labels,
       getPosition: (d) => d.pos,
       getPixelOffset: (d) => d.offset || [0, 0],
       getText: (d) => d.text,
@@ -425,6 +427,7 @@ export default function MapView({
   const tooltip = ({ object }) => {
     const b = object?.b;
     if (!b) return null;
+    if (labels.some((l) => l.hoverOnly && l.id === b.id)) return null; // its label already shows
     const role = tab === "dc" && b.dc
       ? `Data center: ~${Math.round(b.dc_heat_mmbtu).toLocaleString()} MMBtu/yr of IT heat (${b.dc_measured ? "measured" : "estimated"})`
       : isSrc(b)

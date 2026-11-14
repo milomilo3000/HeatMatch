@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { pairEcon, fmt, KIND_LABEL } from "./econ.js";
+import { Savings } from "./ResultsPanel.jsx";
 
 const TIERS = { 1: "Wall", 2: "Block", 3: "Street", 4: "Farther" };
 const ROUTE = { 1: "Wall", 2: "Block", 3: "Street", 4: "Farther" };
@@ -17,18 +18,18 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, tab,
     const rows = pairs.map((p) => ({ p, e: pairEcon(p, data.buildings.get(p.k), A, opts) }));
     const key = {
       tco2e: (r) => -r.e.tco2e,
-      payback: (r) => (r.e.payback == null ? 1e9 : r.e.payback),
+      savings: (r) => -r.e.value,
       dist: (r) => r.p.dist_m,
-    }[filters.sort];
+    }[filters.sort] || ((r) => -r.e.tco2e);
     return rows.sort((a, b) => key(a) - key(b)).slice(0, 80);
   }, [pairs, filters.sort, filters.mode, filters.storage, data, A]);
 
   const rankedChains = useMemo(() => {
     const key = {
       tco2e: (c) => -c.m.tco2e,
-      payback: (c) => (c.m.payback == null ? 1e9 : c.m.payback),
+      savings: (c) => -c.m.value,
       dist: (c) => c.m.pipeM,
-    }[filters.sort];
+    }[filters.sort] || ((c) => -c.m.tco2e);
     return [...chains].sort((a, b) => key(a) - key(b)).slice(0, 80);
   }, [chains, filters.sort]);
 
@@ -125,7 +126,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, tab,
               : `${fmt.int(pairs.length)} listed`}
           </h3>
           <div className="seg" style={{ width: 168 }}>
-            {[["tco2e", "CO₂"], ["payback", "Payback"], ["dist", "Near"]].map(([k, l]) => (
+            {[["tco2e", "CO₂"], ["savings", "Savings"], ["dist", "Near"]].map(([k, l]) => (
               <button key={k} className={filters.sort === k ? "on" : ""} onClick={() => set("sort", k)}>{l}</button>
             ))}
           </div>
@@ -143,7 +144,8 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, tab,
                   {names[0]}<span className="arrow">→</span>{names.slice(1).join(" → ")}
                 </div>
                 <div className="meta">
-                  <span>{c.m.payback ? `${c.m.payback.toFixed(0)} yr` : "—"}</span>
+                  <span>{fmt.usdRange(c.m.capexLow, c.m.capexHigh)}</span>
+                  <Savings value={c.m.value} />
                   <span>{fmt.big(c.m.tco2e)} t CO₂/yr</span>
                 </div>
               </div>
@@ -166,8 +168,9 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, tab,
                 </div>
                 <div className="meta">
                   <span className={`badge t${p.tier}`}>{ROUTE[p.tier]}</span>
-                  <span>{srcLabel(s)}</span>
-                  <span>{e.payback ? `${e.payback.toFixed(0)} yr` : "—"}</span>
+                  {tab !== "dc" && <span>{srcLabel(s)}</span>}
+                  <span>{fmt.usdRange(e.capexLow, e.capexHigh)}</span>
+                  <Savings value={e.value} />
                   <span>{fmt.big(e.tco2e)} t CO₂/yr</span>
                 </div>
               </div>

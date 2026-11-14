@@ -6,22 +6,33 @@ const HEAT_USER_TYPES = [
   "Other - Lodging/Residential", "Hotel", "Fitness Center/Health Club/Gym",
 ];
 
+// what heats the building today (recovered heat would replace part of it)
+const HEATED_BY = { steam: "Con Ed district steam", gas: "a gas boiler", oil: "an oil boiler" };
+
 function roleLabel(building, entry, tab) {
   if (tab === "dc" && building?.dc) {
     return building.dc_measured ? "Data center · measured IT heat" : "Data center · estimated IT heat";
   }
   if (building?.source && building?.sink) return "Can give and use heat";
   if (building?.source) return `Gives away heat · ${(KIND_LABEL[building.source] || "source").toLowerCase()}`;
-  if (building?.sink) return `Needs heat · ${FUEL_LABEL[building.fuel] || "fuel"}`;
+  if (building?.sink) return `Needs heat · now heated by ${HEATED_BY[building.fuel] || "fossil fuel"}`;
   if (entry.role?.includes("s") && entry.role?.includes("k")) return "Can give and use heat";
   if (entry.role?.includes("d") || entry.role?.includes("s")) return tab === "dc" ? "Gives away heat" : "Gives away heat";
   if (entry.role?.includes("k")) return "Needs heat";
   return null;
 }
 
+/** Yearly savings: green when money is saved; otherwise "adds $X/yr" in red (never a negative "saving"). */
+export function Savings({ value, suffix = "/yr" }) {
+  if (value == null || !isFinite(value)) return <span>–</span>;
+  return value >= 0
+    ? <span className="pos">{fmt.usd(value)}{suffix}</span>
+    : <span className="neg">adds {fmt.usd(Math.abs(value))}{suffix}</span>;
+}
+
 export default function ResultsPanel({
   entry, building, partners, nearby, mode, setMode, selectedId, onSelect, onClose,
-  tab, otherTabCount, onSwitchTab, intentChips, onClearIntent, onOwnerData, sortLabel,
+  tab, otherTabCount, onSwitchTab, intentChips, onClearIntent, onOwnerData, sortLabel, onHoverPartner,
 }) {
   const role = roleLabel(building, entry, tab);
   const otherTab = tab === "dc" ? "commercial" : "dc";
@@ -33,7 +44,9 @@ export default function ResultsPanel({
         <div className="eyebrow">Your building</div>
         <h2>{entry.name}</h2>
         <div className="muted">{entry.address}{entry.borough ? `, ${entry.borough}` : ""}</div>
-        {role && <div className="role-pill">{role}</div>}
+        {role && (
+          <div className="role-pill" title={building?.sink && !building?.source ? "This is what heats the building today; recovered heat would replace part of it." : undefined}>{role}</div>
+        )}
         {entry.part_of && (
           <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
             Shown as part of {entry.part_of}
@@ -62,11 +75,6 @@ export default function ResultsPanel({
         </div>
       )}
 
-      {tab === "commercial" && entry.id >= 0 && (
-        <div className="est-banner">
-          <b>Estimates.</b> Cooling and refrigeration loads aren’t metered publicly — treat results as directional.
-        </div>
-      )}
 
       {entry.id >= 0 && (
         <>
@@ -91,16 +99,17 @@ export default function ResultsPanel({
                   key={p.id}
                   className={`partner ${p.id === selectedId ? "sel" : ""}`}
                   onClick={() => onSelect(p.id)}
+                  onMouseEnter={() => onHoverPartner?.(other.id)}
+                  onMouseLeave={() => onHoverPartner?.(null)}
                 >
                   <span className={`num ${youAreSource ? "snk" : "src"}`}>{i + 1}</span>
                   <span className="pbody">
                     <span className="pname">
                       {other.name}
-                      {e.cost?.quoted && <span className="conf m">your quote</span>}
                     </span>
                     <span className="pstats pstats-2 pstats-lg">
-                      <span className="stat-primary"><em>Payback</em>{fmt.yrRange(e.paybackLow, e.paybackHigh)}</span>
                       <span className="stat-primary"><em>Est. cost</em>{fmt.usdRange(e.capexLow, e.capexHigh)}</span>
+                      <span className="stat-primary"><em>Est. savings</em><Savings value={e.value} /></span>
                     </span>
                   </span>
                   <span className={`match-score s-${tone}`} title={`Heat match score ${match.score}/100 · ${match.label}`}>
