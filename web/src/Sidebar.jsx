@@ -3,7 +3,7 @@ import { pairEcon, fmt, KIND_LABEL } from "./econ.js";
 
 const TIERS = { 1: "Shared wall", 2: "Same block", 3: "Across street", 4: "Further" };
 
-export default function Sidebar({ data, filters, setFilters, pairs, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
+export default function Sidebar({ data, filters, setFilters, pairs, totals, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
   const chainMode = filters.chainSize > 2;
   const A = data.summary.assumptions;
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
@@ -32,6 +32,11 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
 
   return (
     <aside className="sidebar">
+      {totals && (
+        <div className="summary-line">
+          {fmt.int(totals.pairs)} pairs with positive value · <b>{fmt.big(totals.tco2e)}</b> tCO₂e/yr avoidable
+        </div>
+      )}
       <section>
         <h3>Pipeline</h3>
         <div className="row" style={{ marginTop: 0 }}>
@@ -59,9 +64,10 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
         </div>
       </section>
 
+      <details className="more">
+        <summary>More filters</summary>
       <section>
-        <h3>Timing</h3>
-        <div className="row">
+        <div className="row" style={{ marginTop: 0 }}>
           <span>Min. hour-by-hour overlap</span>
           <b>{fmt.pct(filters.minCoincidence)}</b>
         </div>
@@ -87,7 +93,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
       </section>
 
       <section>
-        <h3>Heat source</h3>
+        <div className="row" style={{ marginTop: 0 }}><span>Heat source</span></div>
         <div className="chips">
           {Object.entries(KIND_LABEL).map(([k, label]) => (
             <button key={k} className={`chip ${filters.kinds.includes(k) ? "on" : ""}`} onClick={() => toggle("kinds", k)}>
@@ -96,6 +102,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
           ))}
         </div>
       </section>
+      </details>
 
       <section style={{ paddingBottom: 6 }}>
         <div className="row" style={{ margin: 0 }}>

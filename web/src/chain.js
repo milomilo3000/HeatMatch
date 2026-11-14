@@ -5,7 +5,7 @@
 // an estimate. The two-building pair numbers elsewhere come from the full 8,760-hour simulation.
 
 import { nearestWalls, footprintRadius, hopTier, sizePipe } from "./pipe.js";
-import { gridVal, demandAt } from "./econ.js";
+import { gridVal, demandAt, costRange } from "./econ.js";
 
 const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const CELL = 0.002; // ~170 m x 220 m spatial index cells
@@ -85,20 +85,36 @@ export function scoreChain(ids, hops, ctx, withGrids = false) {
   const elecUsd = hpKwh * A.elec_usd_per_kwh;
   const waterUsd = matched * (1 - 1 / A.hp_cop) * A.tower_gal_per_kbtu * A.water_usd_per_gal;
   const tco2e = tFuel - hpKwh * A.ll97_elec_t_per_kwh;
-  const ll97 = Math.max(tco2e, 0) * A.ll97_usd_per_t;
+  // LL97 value only for users that face per-ton fines (NYCHA follows Article 321 instead)
+  let tFined = 0;
+  sinks.forEach((k, j) => {
+    const b = buildings.get(k);
+    if (!/HOUSING AUTHORITY/i.test(b.owner || "")) tFined += alloc[j] * (b.t_per_kbtu || 0);
+  });
+  const finedShare = tFuel > 0 ? tFined / tFuel : 0;
+  const ll97 = Math.max(tco2e, 0) * finedShare * A.ll97_usd_per_t;
   const pipeM = hops.reduce((s, x) => s + x.dist, 0);
   const pipeUsd = hops.reduce((s, x) => s + (x.dist * 3.28084 + A.connection_ft) * A.pipe_usd_per_ft[x.tier], 0);
   const hpUsd = (peak / 3.412) * A.hp_usd_per_kw;
   const energy = fuelUsd - elecUsd + waterUsd;
   const value = energy + ll97;
-  const capex = pipeUsd + hpUsd;
+  const cost = costRange({
+    pipeUsd, peakKw: peak / 3.412, A, mode, storageHrs: 0, demandKbtuYr: demTot,
+    sinks: sinks.map((k, j) => {
+      const b = buildings.get(k);
+      return { fuel: b.fuel, units: b.units || 0, peakKw: (peak / 3.412) * (alloc[j] / Math.max(matched, 1)) };
+    }),
+  });
+  const capex = cost.base;
   return {
     mmbtu: matched / 1000, srcMmbtu: srcTot / 1000, demMmbtu: demTot / 1000,
     coincidence: matched / Math.max(1, Math.min(srcTot, demTot)),
     coverage: matched / Math.max(1, demTot),
     users: sinks.map((k, j) => ({ id: k, mmbtu: alloc[j] / 1000, coverage: alloc[j] / Math.max(1, dem[j]) })),
     fuelUsd, elecUsd, waterUsd, energy, ll97, value, tco2e, pipeM, pipeUsd, hpUsd, capex,
+    cost, capexLow: cost.low, capexHigh: cost.high,
     payback: value > 0 ? capex / value : null, peakKw: peak / 3.412,
+    paybackLow: value > 0 ? cost.low / value : null, paybackHigh: value > 0 ? cost.high / value : null,
     pipe: sizePipe(peak / 3.412, A), grids: G,
   };
 }

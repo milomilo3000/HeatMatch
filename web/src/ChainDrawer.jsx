@@ -39,7 +39,7 @@ export default function ChainDrawer({ data, grids, chain, filters, hour, month, 
         <div className="kpis">
           <div className="kpi"><div className="v" style={{ color: "var(--heat)" }}>{fmt.int(m.mmbtu)}</div><div className="l">MMBtu/yr reused</div></div>
           <div className="kpi"><div className="v" style={{ color: "var(--good)" }}>{fmt.int(m.tco2e)}</div><div className="l">tCO₂e/yr avoided</div></div>
-          <div className="kpi"><div className="v">{fmt.yr(m.payback)}</div><div className="l">simple payback</div></div>
+          <div className="kpi"><div className="v">{fmt.yrRange(m.paybackLow, m.paybackHigh)}</div><div className="l">simple payback</div></div>
         </div>
       </div>
 
@@ -131,11 +131,13 @@ export default function ChainDrawer({ data, grids, chain, filters, hour, month, 
         <div className="econ-row"><span>Cooling-tower water saved</span><span className="pos">+{fmt.usd(m.waterUsd)}</span></div>
         <div className="econ-row"><span>LL97 penalty avoided (${A.ll97_usd_per_t}/t)</span><span className="pos">+{fmt.usd(m.ll97)}</span></div>
         <div className="econ-row total"><span>Annual value</span><span>{fmt.usd(m.value)}</span></div>
-        <div className="econ-row"><span>Capex: pipe {fmt.usd(m.pipeUsd)} ({Math.round(m.pipeM)} m) + heat pumps {fmt.usd(m.hpUsd)}</span><span>{fmt.usd(m.capex)}</span></div>
+        <div className="econ-row total"><span>Estimated installed cost ({Math.round(m.pipeM)} m of pipe)</span><span>{fmt.usdRange(m.capexLow, m.capexHigh)}</span></div>
+        {m.cost.items.map((it) => (
+          <div key={it.label} className="econ-row"><span className="note">{it.label}</span><span className="note">{fmt.usd(it.v[1])}</span></div>
+        ))}
         <div className="note" style={{ marginTop: 6 }}>
           Estimated from typical-day (month × hour) profiles, without a storage tank. Pipe routes are drawn wall to
-          wall; a real loop would follow the street grid. Capex excludes building-side conversion and soft costs, the
-          same as the pair view.
+          wall; a real loop would follow the street grid. Line items show the base case.
         </div>
       </div>
     </div>

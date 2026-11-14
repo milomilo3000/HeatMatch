@@ -4,23 +4,19 @@ import maplibregl from "maplibre-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { PolygonLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
-import { PathStyleExtension } from "@deck.gl/extensions";
 import { demandAt, flowAt, KIND_LABEL, FUEL_LABEL } from "./econ.js";
-import { nearestWalls, pipeLines, midpoint, pipeSpec, footprintRadius } from "./pipe.js";
+import { nearestWalls, midpoint, pipeSpec, footprintRadius } from "./pipe.js";
 
 const SRC_RGB = [255, 140, 40];
 const SNK_RGB = [70, 165, 255];
-const DASH = [new PathStyleExtension({ dash: true })];
-
-
-
+const GREY = [70, 76, 92, 200];
 const STYLE = "https://tiles.openfreemap.org/styles/dark";
-const INITIAL = { longitude: -73.975, latitude: 40.735, zoom: 11.6, pitch: 45, bearing: -29 };
+export const INITIAL = { longitude: -73.975, latitude: 40.735, zoom: 11.6, pitch: 45, bearing: -29 };
 const LOOP = 1000;
 const TRIP = 420;
 const PARTICLES = 3;
-const FLAGS = new URLSearchParams(window.location.search);
-const LITE = FLAGS.has("lite"); // ?lite: no particle animation (for weak laptops / debugging)
+const LITE = new URLSearchParams(window.location.search).has("lite"); // ?lite: no animation
+const ON_TOP = { depthCompare: "always", depthWriteEnabled: false };
 
 function DeckOverlay(props) {
   const overlay = useControl(() => new MapboxOverlay({ ...props, interleaved: true }));
@@ -33,11 +29,7 @@ function addContextBuildings(map) {
   const firstSymbol = map.getStyle().layers.find((l) => l.type === "symbol")?.id;
   map.addLayer(
     {
-      id: "hm-3d",
-      source: "openmaptiles",
-      "source-layer": "building",
-      type: "fill-extrusion",
-      minzoom: 12.5,
+      id: "hm-3d", source: "openmaptiles", "source-layer": "building", type: "fill-extrusion", minzoom: 12.5,
       paint: {
         "fill-extrusion-color": "#1b2130",
         "fill-extrusion-height": ["coalesce", ["get", "render_height"], 12],
@@ -49,11 +41,10 @@ function addContextBuildings(map) {
   );
 }
 
-// A curved pipe-like path from source roof to sink roof, for the particle animation.
+// Curved sky arc from source roof to sink roof (the yellow "heat flow" lines).
 function arcPath(s, k) {
   const n = 24, path = [];
-  const dx = (k.lon - s.lon) * 84000, dy = (k.lat - s.lat) * 111000;
-  const dist = Math.hypot(dx, dy);
+  const dist = Math.hypot((k.lon - s.lon) * 84000, (k.lat - s.lat) * 111000);
   const z0 = Math.min(s.height_m, 60) * 0.7, z1 = Math.min(k.height_m, 60) * 0.7;
   const lift = Math.max(12, dist * 0.3);
   for (let i = 0; i <= n; i++) {
@@ -63,9 +54,13 @@ function arcPath(s, k) {
   return path;
 }
 
-export default function MapView({ mapRef, data, grids, pairs, selected, chain, onSelect, hour, month, mode, storage, flowMax }) {
+export default function MapView({
+  mapRef, data, grids, pairs, mode, focus, partners, selected, chain, onSelect, onPickBuilding,
+  hour, month, heatMode, storage, flowMax,
+}) {
   const [time, setTime] = useState(0);
   const [zoom, setZoom] = useState(INITIAL.zoom);
+  const searchMode = mode === "search";
 
   useEffect(() => {
     if (LITE) return;
@@ -79,7 +74,10 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  const get = (id) => data.buildings.get(id);
   const idx = month * 24 + hour;
+  const flowNow = (p) => (grids ? flowAt(p, grids, heatMode, idx) / (flowMax.get(p.id) || 1) : 0.6);
+
   const active = useMemo(() => {
     const ids = new Set();
     for (const p of pairs) { ids.add(p.s); ids.add(p.k); }
@@ -92,96 +90,105 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
     return out;
   }, [data]);
 
-  const flowNow = (p) => (grids ? flowAt(p, grids, mode, idx) / (flowMax.get(p.id) || 1) : 0.6);
-
+  // Pairs drawn as sky arcs. With a searched building, its partners are always included.
   const shown = useMemo(() => {
     const list = pairs.slice(0, 2500);
-    if (selected && !list.includes(selected)) list.push(selected);
+    for (const p of [...(partners || []), selected].filter(Boolean)) if (!list.includes(p)) list.push(p);
     return list;
-  }, [pairs, selected]);
+  }, [pairs, partners, selected]);
+  const partnerSet = useMemo(() => new Set((partners || []).map((p) => p.id)), [partners]);
+  const focusId = focus && focus.id >= 0 && get(focus.id) ? focus.id : null;
+  const emphasized = (p) => (focusId != null ? partnerSet.has(p.id) : selected ? p === selected : true);
 
-  // --- selection: a pair (2 buildings) or a pipeline chain (3–6). The chosen buildings get their own
-  // layer, a ground halo and labels; every pipe segment is drawn at street level with flowing water.
-  const sel = useMemo(() => {
-    let ids, hops;
-    if (chain) ({ ids, hops } = chain);
-    else if (selected) {
-      ids = [selected.s, selected.k];
-      hops = [{ from: selected.s, to: selected.k, dist: selected.dist_m }];
-    } else return null;
-    const get = (id) => data.buildings.get(id);
-    const A = data.summary.assumptions;
-    const spec = chain ? chain.m.pipe : pipeSpec(selected, A, { mode, storage });
-    const segs = hops.map((h, i) => {
-      const route = nearestWalls(get(h.from), get(h.to));
-      return { route, lines: pipeLines(route), dist: h.dist, n: i + 1 };
-    });
-    const flow = [];
-    segs.forEach((g, i) => {
-      for (let j = 0; j < 5; j++) {
-        const off = (j * LOOP) / 5 + i * 90; // later hops lag, so heat visibly travels down the chain
-        flow.push({ path: g.lines.supply, rgb: SRC_RGB, ts: [off, off + 200] });
-        flow.push({ path: g.lines.ret, rgb: SNK_RGB, ts: [off + 60, off + 260] });
+  // --- highlighted buildings, labels, halos and ground pipes for the current selection
+  const hl = useMemo(() => {
+    const items = [], segs = [];
+    const seg = (from, to, dist) => segs.push({ route: nearestWalls(get(from), get(to)), dist });
+    if (searchMode && focus) {
+      if (focusId != null) {
+        const fb = get(focusId);
+        items.push({ id: focusId, rgb: fb.source ? SRC_RGB : SNK_RGB, text: `YOUR BUILDING\n${fb.name}`, halo: true });
+        (partners || []).forEach((p, i) => {
+          const other = p.s === focusId ? p.k : p.s;
+          items.push({ id: other, rgb: p.s === focusId ? SNK_RGB : SRC_RGB, text: ` ${i + 1} `, big: true, halo: selected === p });
+        });
       }
+      if (selected) seg(selected.s, selected.k, selected.dist_m);
+    } else if (chain) {
+      chain.ids.forEach((id, i) => items.push({ id, rgb: i ? SNK_RGB : SRC_RGB, text: i ? ` ${i} ` : " S ", big: true, halo: true }));
+      chain.hops.forEach((h) => seg(h.from, h.to, h.dist));
+    } else if (selected) {
+      items.push({ id: selected.s, rgb: SRC_RGB, text: `HEAT SOURCE\n${get(selected.s).name}`, halo: true });
+      items.push({ id: selected.k, rgb: SNK_RGB, text: `HEAT USER\n${get(selected.k).name}`, halo: true });
+      seg(selected.s, selected.k, selected.dist_m);
+    }
+    const spec = selected ? pipeSpec(selected, data.summary.assumptions, { mode: heatMode, storage }) : null;
+    const labels = items.map((it) => {
+      const b = get(it.id);
+      return { pos: [b.lon, b.lat, (b.height_m || 10) + 10], text: it.text, rgb: it.rgb, big: it.big };
     });
-    const labels = ids.map((id, i) => {
-      const b = get(id);
-      // chains: compact numbered markers (S, 1, 2, …) that match the side panel; names live there.
-      // Pairs have room for full labels.
-      const text = chain ? (i === 0 ? " S " : ` ${i} `) : `${i === 0 ? "HEAT SOURCE" : "HEAT USER"}\n${b.name}`;
-      return { pos: [b.lon, b.lat, (b.height_m || 10) + 10], text, rgb: i === 0 ? SRC_RGB : SNK_RGB, big: !!chain };
-    });
-    if (!chain) segs.forEach((g) => labels.push({ // chain hop distances are listed in the panel instead
-      pos: midpoint(g.route, 5),
-      offset: [0, -42], // float above the pipe so the pipe itself stays visible
-      text: `${Math.round(g.dist)} m pipe · 2 × ${spec.nominalIn}″ · ${Math.round(spec.gpm).toLocaleString()} gpm`,
-      rgb: [255, 230, 190],
-    }));
+    if (selected && !chain)
+      segs.forEach((g) => labels.push({
+        pos: midpoint(g.route, 5), offset: [0, -40], rgb: [255, 226, 180],
+        text: `${Math.round(g.dist)} m pipe · 2 × ${spec.nominalIn}″`,
+      }));
     return {
-      srcId: ids[0], ids: new Set(ids), segs, flow, labels,
-      halos: ids.map((id, i) => ({ b: get(id), rgb: i === 0 ? SRC_RGB : SNK_RGB, r: footprintRadius(get(id)) })),
+      items, segs, labels,
+      color: new globalThis.Map(items.map((it) => [it.id, it.rgb])),
+      halos: items.filter((it) => it.halo).map((it) => ({ b: get(it.id), rgb: it.rgb, r: footprintRadius(get(it.id)) })),
     };
-  }, [selected, chain, data, mode, storage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchMode, focus, focusId, partners, selected, chain, data, heatMode, storage]);
 
-  const basePolys = useMemo(() => (sel ? polys.filter((d) => !sel.ids.has(d.b.id)) : polys), [polys, sel]);
-  const selPolys = useMemo(() => (sel ? polys.filter((d) => sel.ids.has(d.b.id)) : []), [polys, sel]);
+  const anyHl = hl.items.length > 0;
+  const basePolys = useMemo(() => (anyHl ? polys.filter((d) => !hl.color.has(d.b.id)) : polys), [polys, hl, anyHl]);
+  const hlPolys = useMemo(() => (anyHl ? polys.filter((d) => hl.color.has(d.b.id)) : []), [polys, hl, anyHl]);
 
   const trips = useMemo(() => {
     const out = [];
     for (const p of shown) {
-      if (p === selected) continue; // the selected pair is drawn as a ground-level pipe instead
-      const s = data.buildings.get(p.s), k = data.buildings.get(p.k);
-      const path = arcPath(s, k);
+      const path = arcPath(get(p.s), get(p.k));
       for (let j = 0; j < PARTICLES; j++) {
         const off = (j * LOOP) / PARTICLES + ((p.id * 37) % 200);
         out.push({ p, path, ts: path.map((_, i) => off + (i / (path.length - 1)) * TRIP) });
       }
     }
     return out;
-  }, [shown, data, selected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, data]);
 
   const intensity = (b) => {
     const g = grids?.[b.id];
     if (!g) return 0.7;
     if (b.source && g.src) return g.src[idx] / 999;
-    if (g.dhw) return demandAt(g, mode, idx) / ((g.dhw_max || 0) + (mode === "all" ? g.space_max || 0 : 0) || 1);
+    if (g.dhw) return demandAt(g, heatMode, idx) / ((g.dhw_max || 0) + (heatMode === "all" ? g.space_max || 0 : 0) || 1);
     return 0.5;
   };
 
-  // With a selection, every other building fades to a muted grey so the chosen two stand out.
+  // Search mode: the whole city is grey. All-candidates mode: sources orange, users blue.
   const buildingColor = ({ b }) => {
-    if (sel) return active.has(b.id) ? [62, 70, 88, 150] : [50, 56, 70, 110];
-    if (!active.has(b.id)) return [70, 76, 92, 200];
+    if (searchMode) return anyHl ? [56, 62, 78, 170] : GREY;
+    if (anyHl) return active.has(b.id) ? [62, 70, 88, 150] : [50, 56, 70, 110];
+    if (!active.has(b.id)) return GREY;
     const v = Math.max(0.15, Math.min(1, intensity(b)));
-    if (b.source) return [255, 70 + 90 * v, 20, 255].map((c, i) => (i < 3 ? c * (0.35 + 0.65 * v) : c));
-    return [40, 120 + 40 * v, 255, 255].map((c, i) => (i < 3 ? c * (0.35 + 0.65 * v) : c));
+    const base = b.source ? [255, 70 + 90 * v, 20] : [40, 120 + 40 * v, 255];
+    return [...base.map((c) => c * (0.35 + 0.65 * v)), 255];
   };
-  const pulse = (time % 300) / 300; // 0→1 repeating, drives the halo rings
-  const pickBuilding = ({ object }) => {
+
+  const pulse = (time % 300) / 300; // halo rings
+  const breathe = 0.5 + 0.5 * Math.sin((time / LOOP) * Math.PI * 2 * 1.5); // slow glow on the ground pipe
+
+  function onBuildingClick({ object }) {
     const id = object?.b.id;
+    if (id == null) return;
+    if (searchMode) {
+      const p = (partners || []).find((x) => x.s === id || x.k === id);
+      if (p && focusId != null && id !== focusId) return onSelect(p.id);
+      return onPickBuilding(id);
+    }
     const best = pairs.find((p) => p.s === id || p.k === id);
     if (best) onSelect(best.id);
-  };
+  }
 
   const layers = [
     new PolygonLayer({
@@ -193,28 +200,28 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
       getFillColor: buildingColor,
       material: { ambient: 0.45, diffuse: 0.6, shininess: 24 },
       pickable: true,
-      autoHighlight: true, // hover feedback before clicking
+      autoHighlight: true,
       highlightColor: [255, 255, 255, 70],
-      updateTriggers: { getFillColor: [idx, mode, active, !!sel, !!grids] },
-      onClick: pickBuilding,
+      updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids] },
+      onClick: onBuildingClick,
     }),
-    sel && new PolygonLayer({
-      id: "selected-buildings",
-      data: selPolys,
+    anyHl && new PolygonLayer({
+      id: "highlighted-buildings",
+      data: hlPolys,
       getPolygon: (d) => d.poly,
       extruded: true,
-      wireframe: true, // white edges outline the chosen buildings
+      wireframe: true,
       getElevation: (d) => (d.b.height_m || 10) + 1.2,
-      getFillColor: (d) => [...(d.b.id === sel.srcId ? SRC_RGB : SNK_RGB), 255],
+      getFillColor: (d) => [...hl.color.get(d.b.id), 255],
       getLineColor: [255, 255, 255, 235],
       material: { ambient: 0.75, diffuse: 0.5, shininess: 40 },
       pickable: true,
-      onClick: pickBuilding,
-      updateTriggers: { getFillColor: [sel.srcId] },
+      onClick: onBuildingClick,
+      updateTriggers: { getFillColor: [hl] },
     }),
-    sel && new ScatterplotLayer({
-      id: "selected-halo",
-      data: [...sel.halos, ...sel.halos.map((h) => ({ ...h, phase: 0.5 }))],
+    hl.halos.length > 0 && new ScatterplotLayer({
+      id: "halos",
+      data: [...hl.halos, ...hl.halos.map((h) => ({ ...h, phase: 0.5 }))],
       getPosition: (h) => [h.b.lon, h.b.lat, 0.3],
       getRadius: (h) => h.r + 4 + 14 * ((pulse + (h.phase || 0)) % 1),
       getLineColor: (h) => [...h.rgb, 150 * (1 - ((pulse + (h.phase || 0)) % 1))],
@@ -224,38 +231,33 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
       getLineWidth: 2,
       updateTriggers: { getRadius: [pulse], getLineColor: [pulse] },
     }),
-    zoom < 14 &&
-      new ScatterplotLayer({
-        id: "hotspots",
-        data: shown,
-        getPosition: (p) => {
-          const s = data.buildings.get(p.s), k = data.buildings.get(p.k);
-          return [(s.lon + k.lon) / 2, (s.lat + k.lat) / 2, 2];
-        },
-        // Soft, small glows: many overlap in dense areas, so keep each one faint and let
-        // buildings in front hide them (normal depth test) instead of painting over the city.
-        getRadius: (p) => 12 + Math.sqrt(Math.max(p.t_co2e, 0)) * 1.2,
-        radiusMinPixels: 1.5,
-        radiusMaxPixels: 14,
-        getFillColor: (p) => [255, 150 + 60 * flowNow(p), 40, 16 + 50 * flowNow(p)],
-        stroked: false,
-        opacity: sel ? 0.35 : Math.max(0.35, Math.min(1, (14 - zoom) / 1.5)),
-        pickable: true,
-        onClick: ({ object }) => object && onSelect(object.id),
-        updateTriggers: { getFillColor: [idx, mode, flowMax] },
-        parameters: { depthWriteEnabled: false },
-      }),
+    !searchMode && zoom < 14 && new ScatterplotLayer({
+      id: "hotspots",
+      data: shown,
+      getPosition: (p) => [(get(p.s).lon + get(p.k).lon) / 2, (get(p.s).lat + get(p.k).lat) / 2, 2],
+      getRadius: (p) => 12 + Math.sqrt(Math.max(p.t_co2e, 0)) * 1.2,
+      radiusMinPixels: 1.5,
+      radiusMaxPixels: 14,
+      getFillColor: (p) => [255, 150 + 60 * flowNow(p), 40, 16 + 50 * flowNow(p)],
+      opacity: anyHl ? 0.35 : Math.max(0.35, Math.min(1, (14 - zoom) / 1.5)),
+      pickable: true,
+      onClick: ({ object }) => object && onSelect(object.id),
+      updateTriggers: { getFillColor: [idx, heatMode, flowMax] },
+      parameters: { depthWriteEnabled: false },
+    }),
+
+    // --- sky arcs + flying particles (kept as-is; the selected/partner arcs are emphasized)
     new PathLayer({
-      id: "pipes",
-      data: sel ? shown.filter((p) => p !== selected) : shown,
-      getPath: (p) => arcPath(data.buildings.get(p.s), data.buildings.get(p.k)),
-      getColor: (p) => [255, 160, 60, (sel ? 0.35 : 1) * (40 + 60 * flowNow(p))],
-      getWidth: 1.2,
+      id: "arcs",
+      data: shown,
+      getPath: (p) => arcPath(get(p.s), get(p.k)),
+      getColor: (p) => (p === selected ? [255, 210, 120, 230] : [255, 160, 60, (emphasized(p) ? 1 : 0.18) * (40 + 60 * flowNow(p))]),
+      getWidth: (p) => (p === selected ? 2.6 : 1.2),
       widthUnits: "meters",
       widthMinPixels: 1,
       pickable: true,
       onClick: ({ object }) => object && onSelect(object.id),
-      updateTriggers: { getColor: [idx, mode, !!sel, flowMax] },
+      updateTriggers: { getColor: [idx, heatMode, selected, partnerSet, focusId, flowMax], getWidth: [selected] },
     }),
     !LITE && new TripsLayer({
       id: "heat-flow",
@@ -264,9 +266,10 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
       getTimestamps: (d) => d.ts,
       getColor: (d) => {
         const f = flowNow(d.p);
-        return [255, 190 + 50 * f, 80 + 60 * f, f < 0.05 ? 0 : sel ? 70 : 255];
+        const a = emphasized(d.p) ? 255 : 45;
+        return [255, 190 + 50 * f, 80 + 60 * f, f < 0.05 ? 0 : a];
       },
-      getWidth: (d) => 2 + 4 * flowNow(d.p),
+      getWidth: (d) => (d.p === selected ? 6 : 2 + 4 * flowNow(d.p)),
       widthUnits: "meters",
       widthMinPixels: 2,
       capRounded: true,
@@ -274,62 +277,70 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
       trailLength: 160,
       currentTime: time,
       fadeTrail: true,
-      updateTriggers: { getColor: [idx, mode, flowMax, !!sel], getWidth: [idx, mode, flowMax] },
+      updateTriggers: { getColor: [idx, heatMode, flowMax, partnerSet, focusId, selected], getWidth: [idx, heatMode, flowMax, selected] },
     }),
 
-    // --- the proposed pipe for the selected pair: supply (orange) and return (blue), at street level
-    sel && new PathLayer({
-      id: "pipe-route",
-      data: sel.segs.flatMap((g) => [
-        { path: g.lines.supply, rgb: SRC_RGB },
-        { path: g.lines.ret, rgb: SNK_RGB },
-      ]),
-      getPath: (d) => d.path,
-      getColor: (d) => [...d.rgb, 255],
-      getWidth: 1.4,
+    // --- the proposed pipe at street level: one solid line with a soft, slowly breathing glow
+    hl.segs.length > 0 && new PathLayer({
+      id: "pipe-glow",
+      data: hl.segs,
+      getPath: (g) => [[...g.route.a, 0.5], [...g.route.b, 0.5]],
+      getColor: [255, 196, 110, 40 + 70 * breathe],
+      getWidth: 6,
       widthUnits: "meters",
-      widthMinPixels: 5,
+      widthMinPixels: 10,
       capRounded: true,
-      getDashArray: [3, 1.5],
-      dashJustified: true,
-      extensions: DASH,
-      parameters: { depthCompare: "always", depthWriteEnabled: false },
+      updateTriggers: { getColor: [breathe] },
+      parameters: ON_TOP,
     }),
-    sel && !LITE && new TripsLayer({
-      id: "pipe-flow",
-      data: sel.flow,
-      getPath: (d) => d.path,
-      getTimestamps: (d) => d.ts,
-      getColor: (d) => [...d.rgb.map((c) => Math.min(255, c + 60)), 255],
+    hl.segs.length > 0 && new PathLayer({
+      id: "pipe-core",
+      data: hl.segs,
+      getPath: (g) => [[...g.route.a, 0.6], [...g.route.b, 0.6]],
+      getColor: [255, 222, 160, 255],
       getWidth: 1.6,
       widthUnits: "meters",
-      widthMinPixels: 5,
+      widthMinPixels: 3.5,
       capRounded: true,
-      trailLength: 70,
-      fadeTrail: true,
-      currentTime: time,
-      parameters: { depthCompare: "always", depthWriteEnabled: false },
+      parameters: ON_TOP,
     }),
-    sel && new ScatterplotLayer({
+    hl.segs.length > 0 && new ScatterplotLayer({
       id: "pipe-ends",
-      data: sel.segs.flatMap((g) => [g.route.a, g.route.b]),
+      data: hl.segs.flatMap((g) => [g.route.a, g.route.b]),
       getPosition: (p) => [...p, 0.8],
-      getRadius: 1.6,
-      radiusMinPixels: 5,
+      getRadius: 1.4,
+      radiusMinPixels: 4,
       getFillColor: [255, 255, 255, 255],
       stroked: true,
       getLineColor: [20, 24, 32, 255],
-      lineWidthMinPixels: 2,
-      parameters: { depthCompare: "always", depthWriteEnabled: false },
+      lineWidthMinPixels: 1.5,
+      parameters: ON_TOP,
     }),
-    sel && new TextLayer({
-      id: "selection-labels",
-      data: sel.labels,
+
+    // a searched building that isn't modeled (no footprint in our data) still gets a pin
+    searchMode && focus && focusId == null && new ScatterplotLayer({
+      id: "focus-pin",
+      data: [focus],
+      getPosition: (e) => [e.lon, e.lat, 1],
+      getRadius: 10,
+      radiusMinPixels: 8,
+      getFillColor: [255, 255, 255, 230],
+      stroked: true,
+      getLineColor: [12, 15, 24, 255],
+      lineWidthMinPixels: 3,
+      parameters: ON_TOP,
+    }),
+
+    (hl.labels.length > 0 || (searchMode && focus && focusId == null)) && new TextLayer({
+      id: "labels",
+      data: focusId == null && searchMode && focus
+        ? [{ pos: [focus.lon, focus.lat, 12], offset: [0, -24], text: focus.name, rgb: [235, 238, 245] }]
+        : hl.labels,
       getPosition: (d) => d.pos,
       getPixelOffset: (d) => d.offset || [0, 0],
       getText: (d) => d.text,
       getColor: (d) => [...d.rgb, 255],
-      getSize: (d) => (d.big ? 17 : 13),
+      getSize: (d) => (d.big ? 16 : 13),
       sizeUnits: "pixels",
       fontFamily: "Inter, system-ui, sans-serif",
       fontWeight: 600,
@@ -340,16 +351,18 @@ export default function MapView({ mapRef, data, grids, pairs, selected, chain, o
       backgroundPadding: [8, 5],
       getBorderColor: (d) => [...d.rgb, 200],
       getBorderWidth: (d) => (d.big ? 2 : 1),
-      parameters: { depthCompare: "always", depthWriteEnabled: false },
+      parameters: ON_TOP,
     }),
   ].filter(Boolean);
 
   const tooltip = ({ object }) => {
     const b = object?.b;
     if (!b) return null;
-    const role = b.source ? `${KIND_LABEL[b.source]} — rejects heat` : `Heats with ${FUEL_LABEL[b.fuel] || "fossil fuel"}`;
-    return { html: `<b>${b.name}</b><br/>${b.type}<br/><span style="opacity:.75">${role}</span>`, className: "tooltip",
-      style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3" } };
+    const role = b.source ? `${KIND_LABEL[b.source]}: rejects heat` : `Heats with ${FUEL_LABEL[b.fuel] || "fossil fuel"}`;
+    return {
+      html: `<b>${b.name}</b><br/>${b.type}<br/><span style="opacity:.75">${role}</span>`,
+      style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3", fontFamily: "Inter, sans-serif", fontSize: "12px" },
+    };
   };
 
   return (

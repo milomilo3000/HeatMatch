@@ -1,4 +1,46 @@
-// Mirrors pipeline/economics.py so the sliders can re-price a pair live in the browser.
+// Mirrors pipeline/economics.py so the sliders can re-price a pair live in the browser,
+// plus a fuller installed-cost range (costRange) that the pipeline's equipment-only number lacks.
+
+// Installed-cost assumptions, [low, base, high]. Screening values, shown to users in the
+// "Cost breakdown & assumptions" section; replace with quotes for any real project.
+export const COST = {
+  tiePerKw: [200, 300, 500], // source tie-in: plate heat exchanger, pumps, controls, per kW of heat carried
+  dhwPerKw: [200, 300, 500], // sink hot-water integration (tanks, piping), per kW delivered
+  spacePerKw: [300, 400, 600], // sink space-heat integration on a hydronic system, per kW delivered
+  steamPerUnit: [6000, 12000, 20000], // steam-heated buildings: per-apartment conversion to low-temp heat
+  tankPerKwh: [20, 30, 60], // thermal storage, per kWh of heat stored
+  soft: [0.25, 0.3, 0.4], // engineering, permits, construction management (share of hard cost)
+  contingency: [0.15, 0.25, 0.35], // share of hard cost
+};
+
+const isNycha = (b) => /HOUSING AUTHORITY/i.test(b?.owner || "");
+
+// Line items with low/base/high. sinks: [{ fuel, units, peakKw }] (one per heat user).
+export function costRange({ pipeUsd, peakKw, sinks, demandKbtuYr, storageHrs, mode, A }) {
+  const lohi = (f) => [0, 1, 2].map(f);
+  const items = [
+    { label: "Pipe (supply + return, trenching)", v: lohi(() => pipeUsd) },
+    { label: `Heat pumps ($${A.hp_usd_per_kw.toLocaleString()}/kW at peak)`, v: lohi(() => peakKw * A.hp_usd_per_kw) },
+    { label: "Source tie-in (heat exchanger, pumps)", v: lohi((i) => peakKw * (1 - 1 / A.hp_cop) * COST.tiePerKw[i]) },
+    {
+      label: mode === "dhw" ? "Hot-water hookup at the user" : "Heating hookup at the user",
+      v: lohi((i) => sinks.reduce((s, k) => {
+        if (mode === "dhw") return s + k.peakKw * COST.dhwPerKw[i];
+        if (k.fuel === "steam" && k.units > 0) return s + k.units * COST.steamPerUnit[i]; // steam → low-temp conversion
+        return s + k.peakKw * COST.spacePerKw[i];
+      }, 0)),
+      note: mode === "all" && sinks.some((k) => k.fuel === "steam" && k.units > 0)
+        ? "Steam-heated buildings need per-apartment conversion to low-temperature heat" : null,
+    },
+  ];
+  if (storageHrs > 0)
+    items.push({ label: `Storage tank (${storageHrs} h)`, v: lohi((i) => (demandKbtuYr / 8760 / 3.412) * storageHrs * COST.tankPerKwh[i]) });
+  const hard = lohi((i) => items.reduce((s, x) => s + x.v[i], 0));
+  items.push({ label: "Engineering, permits, management", v: lohi((i) => hard[i] * COST.soft[i]) });
+  items.push({ label: "Contingency", v: lohi((i) => hard[i] * COST.contingency[i]) });
+  const total = lohi((i) => items.reduce((s, x) => s + x.v[i], 0));
+  return { items, low: total[0], base: total[1], high: total[2] };
+}
 
 export function pairEcon(pair, sink, A, opts) {
   const { mode = "all", storage = 0, elecPrice = A.elec_usd_per_kwh, pipeMult = 1, includeLL97 = true } = opts;
@@ -10,16 +52,24 @@ export function pairEcon(pair, sink, A, opts) {
   const captured = m * (1 - 1 / A.hp_cop);
   const waterUsd = captured * A.tower_gal_per_kbtu * A.water_usd_per_gal;
   const t = m * (sink.t_per_kbtu || 0) - hpKwh * A.ll97_elec_t_per_kwh;
-  const ll97 = Math.max(t, 0) * A.ll97_usd_per_t;
+  // NYCHA follows LL97 Article 321 (no per-ton fines), so avoided tons carry no penalty value there.
+  const nycha = isNycha(sink);
+  const ll97 = nycha ? 0 : Math.max(t, 0) * A.ll97_usd_per_t;
   const pipeFt = pair.dist_m * 3.28084 + A.connection_ft;
   const pipeUsd = pipeFt * A.pipe_usd_per_ft[pair.tier] * pipeMult;
   const hpUsd = peakKw * A.hp_usd_per_kw;
-  const capex = pipeUsd + hpUsd;
+  const cost = costRange({
+    pipeUsd, peakKw, A, mode, storageHrs: storage, demandKbtuYr: pair[`demand_${mode}`] || 0,
+    sinks: [{ fuel: sink.fuel, units: sink.units || 0, peakKw }],
+  });
   const energy = fuelUsd - elecUsd + waterUsd;
   const value = energy + (includeLL97 ? ll97 : 0);
+  const pb = (c) => (value > 0 ? c / value : null);
   return {
     mmbtu: m / 1000, peakKw, hpMwh: hpKwh / 1000, fuelUsd, elecUsd, waterUsd, energy, ll97, value,
-    tco2e: t, pipeUsd, hpUsd, capex, payback: value > 0 ? capex / value : null,
+    tco2e: t, pipeUsd, hpUsd, cost, nycha,
+    capex: cost.base, capexLow: cost.low, capexHigh: cost.high, capexEquip: pipeUsd + hpUsd,
+    payback: pb(cost.base), paybackLow: pb(cost.low), paybackHigh: pb(cost.high),
   };
 }
 
@@ -110,6 +160,13 @@ export const fmt = {
   },
   pct: (x) => (x == null ? "–" : `${Math.round(x * 100)}%`),
   yr: (x) => (x == null ? "n/a" : `${x.toFixed(1)} yr`),
+  usdRange: (lo, hi) => `${fmt.usd(lo)}–${fmt.usd(hi).replace("$", "")}`,
+  // payback range, capped so "never pays back" doesn't read as a precise number
+  yrRange: (lo, hi) => {
+    if (lo == null || hi == null) return "no payback";
+    if (lo > 40) return "40+ yr";
+    return `${Math.round(lo)}–${hi > 40 ? "40+" : Math.round(hi)} yr`;
+  },
 };
 
 export const KIND_LABEL = {

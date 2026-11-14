@@ -140,3 +140,54 @@ def write(b: pd.DataFrame, p: pd.DataFrame, src_prof: dict, sink_prof: dict, fac
     dump("pairs.json", pairs)
     dump("grids.json", grids)
     dump("summary.json", summary)
+    dump("search.json", search_index(b, set(ids)))
+
+
+ROLE = {(True, False): "s", (False, True): "k", (True, True): "sk", (False, False): ""}
+
+
+def search_index(b: pd.DataFrame, exported: set) -> dict:
+    """Every LL84 2024 property with coordinates, so a building owner can find themselves offline.
+    Each row points at the HeatMatch building that represents it (campus children -> parent,
+    duplicate filings -> the record we kept), or -1 if the building wasn't screened in."""
+    from .clean import split_ids
+
+    raw = fetch.ll84().drop_duplicates("property_id").copy()
+    raw["lat"] = pd.to_numeric(raw["latitude"], errors="coerce")
+    raw["lon"] = pd.to_numeric(raw["longitude"], errors="coerce")
+    raw = raw[raw["lat"].between(40.4, 41.0) & raw["lon"].between(-74.3, -73.6)]
+    fuel = sum(pd.to_numeric(raw[c], errors="coerce").fillna(0).clip(lower=0) for c in C.FUELS)
+
+    by_pid = {pid: i for i, pid in zip(b.index, b["property_id"])}
+    by_bin = {}
+    for i, bins in zip(b.index, b["bins"]):
+        for x in bins:
+            by_bin.setdefault(x, i)
+
+    rows = []
+    for r, f in zip(raw.itertuples(index=False), fuel):
+        i = by_pid.get(r.property_id, by_pid.get(r.parent_property_id))
+        if i is None:
+            i = next((by_bin[x] for x in split_ids(r.nyc_building_identification, 7) if x in by_bin), None)
+        role = ""
+        if i is not None:
+            role = ROLE[(isinstance(b.at[i, "source_kind"], str), isinstance(b.at[i, "sink_kind"], str))]
+        rows.append([
+            int(i) if i is not None else -1,
+            (r.property_name or "").strip(),
+            " ".join(str(r.address_1 or "").split()),
+            str(r.postal_code or "")[:5],
+            str(r.borough or "").title(),
+            r.primary_property_type or "",
+            round(float(r.lon), 6), round(float(r.lat), 6),
+            role,
+            1 if i is not None and int(i) in exported else 0,
+            # fossil heat bought, MMBtu/yr: the HeatMatch building's total when the row maps to one
+            # (a tenant's or child's filing can be a small slice of the building)
+            int(round((b.at[i, "heat_fuel"] if i is not None else f) / 1000)),
+            # when this filing is one part of a larger HeatMatch building (school inside a housing
+            # complex, campus child), name the building it was folded into
+            b.at[i, "property_name"] if i is not None and b.at[i, "property_name"] != r.property_name else "",
+        ])
+    cols = ["id", "name", "address", "zip", "borough", "type", "lon", "lat", "role", "has", "fuel_mmbtu", "part_of"]
+    return {"cols": cols, "rows": rows}
