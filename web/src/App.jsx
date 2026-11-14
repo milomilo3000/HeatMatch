@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import MapView from "./MapView.jsx";
 import Sidebar from "./Sidebar.jsx";
 import PairDrawer from "./PairDrawer.jsx";
+import ChainDrawer from "./ChainDrawer.jsx";
+import { buildIndex, findChains } from "./chain.js";
 import TimeBar from "./TimeBar.jsx";
 import { filterPairs, portfolio, computeFlowMax, fmt } from "./econ.js";
 
@@ -13,6 +15,7 @@ const DEFAULT_FILTERS = {
   mode: "all",
   storage: 0,
   sort: "tco2e",
+  chainSize: 2, // 2 = classic source→user pairs; 3–6 = pipeline chains
 };
 
 async function loadJSON(name) {
@@ -29,6 +32,9 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [hour, setHour] = useState(19);
   const [month, setMonth] = useState(0);
+  const [chains, setChains] = useState([]);
+  const [chainsBusy, setChainsBusy] = useState(false);
+  const [chainKey, setChainKey] = useState(null);
   const mapRef = useRef(null);
   const bookmarkIdx = useRef(0);
 
@@ -43,7 +49,11 @@ export default function App() {
       .catch((e) => setError(String(e)));
   }, []);
 
-  const filtered = useMemo(() => (data ? filterPairs(data.pairs, filters) : []), [data, filters]);
+  const filtered = useMemo(
+    () => (data ? filterPairs(data.pairs, filters) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, filters.maxDist, filters.minCoincidence, filters.tiers, filters.kinds, filters.mode],
+  );
   const opts = { mode: filters.mode, storage: filters.storage };
   const totals = useMemo(
     () => (data ? portfolio(filtered, data.buildings, data.summary.assumptions, opts) : null),
@@ -55,7 +65,38 @@ export default function App() {
 
   const selected = data && selectedId != null ? data.pairById.get(selectedId) : null;
 
+  // --- pipeline chains: searched in the background whenever the chain size or filters change
+  const index = useMemo(() => (data ? buildIndex(data.buildings) : null), [data]);
+  useEffect(() => {
+    setChainKey(null);
+    if (!data || !grids || filters.chainSize < 3) { setChains([]); return; }
+    setChainsBusy(true);
+    const t = setTimeout(() => {
+      setChains(findChains({ size: filters.chainSize, pairs: filtered, buildings: data.buildings, grids,
+        A: data.summary.assumptions, filters, index }));
+      setChainsBusy(false);
+    }, 30); // let the "searching…" state paint first
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, grids, filtered, filters.chainSize]);
+  const selectedChain = chainKey ? chains.find((c) => c.key === chainKey) : null;
+
+  function selectChain(key) {
+    const c = chains.find((x) => x.key === key);
+    setSelectedId(null);
+    setChainKey(key);
+    if (!c || !mapRef.current) return;
+    const bs = c.ids.map((id) => data.buildings.get(id));
+    const lons = bs.map((b) => b.lon), lats = bs.map((b) => b.lat);
+    const extentM = Math.max((Math.max(...lons) - Math.min(...lons)) * 84_300, (Math.max(...lats) - Math.min(...lats)) * 111_320, 60);
+    mapRef.current.flyTo({
+      center: [(Math.max(...lons) + Math.min(...lons)) / 2, (Math.max(...lats) + Math.min(...lats)) / 2],
+      zoom: Math.max(15.9, Math.min(17.2, 17.6 - Math.log2(extentM / 60))), pitch: 52, bearing: -29, duration: 2400, essential: true,
+    });
+  }
+
   function selectPair(id, fly = true) {
+    setChainKey(null);
     setSelectedId(id);
     const p = data?.pairById.get(id);
     if (!p || !fly || !mapRef.current) return;
@@ -79,6 +120,7 @@ export default function App() {
       }
       if (e.key === "o" && mapRef.current) {
         setSelectedId(null);
+        setChainKey(null);
         mapRef.current.flyTo({ center: [-73.975, 40.735], zoom: 11.6, pitch: 45, bearing: -29, duration: 2000 });
       }
     }
@@ -99,10 +141,12 @@ export default function App() {
           grids={grids}
           pairs={filtered}
           selected={selected}
+          chain={selectedChain}
           onSelect={selectPair}
           hour={hour}
           month={month}
           mode={filters.mode}
+          storage={filters.storage}
           flowMax={flowMax}
         />
       </div>
@@ -141,7 +185,24 @@ export default function App() {
         pairs={filtered}
         selectedId={selectedId}
         onSelect={selectPair}
+        chains={chains}
+        chainsBusy={chainsBusy || (filters.chainSize > 2 && !grids)}
+        chainKey={chainKey}
+        onSelectChain={selectChain}
       />
+
+      {selectedChain && (
+        <ChainDrawer
+          key={selectedChain.key}
+          data={data}
+          grids={grids}
+          chain={selectedChain}
+          filters={filters}
+          hour={hour}
+          month={month}
+          onClose={() => setChainKey(null)}
+        />
+      )}
 
       {selected && (
         <PairDrawer
@@ -157,7 +218,7 @@ export default function App() {
         />
       )}
 
-      {!selected && (
+      {!selected && !selectedChain && (
         <div className="legend">
           <span><i style={{ background: "var(--heat)" }} />rejects heat</span>
           <span><i style={{ background: "var(--cold)" }} />burns fuel for heat</span>

@@ -3,7 +3,8 @@ import { pairEcon, fmt, KIND_LABEL } from "./econ.js";
 
 const TIERS = { 1: "Shared wall", 2: "Same block", 3: "Across street", 4: "Further" };
 
-export default function Sidebar({ data, filters, setFilters, pairs, selectedId, onSelect }) {
+export default function Sidebar({ data, filters, setFilters, pairs, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
+  const chainMode = filters.chainSize > 2;
   const A = data.summary.assumptions;
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
   const toggle = (k, v) =>
@@ -20,12 +21,31 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
     return rows.sort((a, b) => key(a) - key(b)).slice(0, 80);
   }, [pairs, filters.sort, filters.mode, filters.storage, data, A]);
 
+  const rankedChains = useMemo(() => {
+    const key = {
+      tco2e: (c) => -c.m.tco2e,
+      payback: (c) => (c.m.payback == null ? 1e9 : c.m.payback),
+      dist: (c) => c.m.pipeM,
+    }[filters.sort];
+    return [...chains].sort((a, b) => key(a) - key(b)).slice(0, 80);
+  }, [chains, filters.sort]);
+
   return (
     <aside className="sidebar">
       <section>
-        <h3>Distance</h3>
+        <h3>Pipeline</h3>
+        <div className="row" style={{ marginTop: 0 }}>
+          <span>Buildings on one pipe</span>
+        </div>
+        <div className="seg" title="2 = one source → one user. 3–6 = one source feeding a chain of users, building to building.">
+          {[2, 3, 4, 5, 6].map((n) => (
+            <button key={n} className={filters.chainSize === n ? "on" : ""} onClick={() => set("chainSize", n)}>
+              {n === 2 ? "2 (pair)" : n}
+            </button>
+          ))}
+        </div>
         <div className="row">
-          <span>Max pipe run</span>
+          <span>{chainMode ? "Max pipe run per hop" : "Max pipe run"}</span>
           <b>{filters.maxDist} m</b>
         </div>
         <input type="range" min={5} max={150} step={5} value={filters.maxDist}
@@ -79,7 +99,9 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
 
       <section style={{ paddingBottom: 6 }}>
         <div className="row" style={{ margin: 0 }}>
-          <h3 style={{ margin: 0 }}>{fmt.int(pairs.length)} matches</h3>
+          <h3 style={{ margin: 0 }}>
+            {chainMode ? (chainsBusy ? "Searching…" : `${fmt.int(chains.length)} chains`) : `${fmt.int(pairs.length)} matches`}
+          </h3>
           <div className="seg" style={{ width: 170 }}>
             {[["tco2e", "CO₂"], ["payback", "Payback"], ["dist", "Closest"]].map(([k, l]) => (
               <button key={k} className={filters.sort === k ? "on" : ""} onClick={() => set("sort", k)}>{l}</button>
@@ -88,7 +110,35 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
         </div>
       </section>
 
-      <div className="list">
+      {chainMode && (
+        <div className="list">
+          {chainsBusy && <div className="note" style={{ padding: 12 }}>Growing {filters.chainSize}-building chains from every heat source…</div>}
+          {!chainsBusy && rankedChains.map((c) => {
+            const names = c.ids.map((id) => data.buildings.get(id).name);
+            return (
+              <div key={c.key} className={`item ${c.key === chainKey ? "sel" : ""}`} onClick={() => onSelectChain(c.key)}>
+                <div className="names" title={names.join(" → ")}>
+                  {names[0]}<span className="arrow">→</span>{names.slice(1).join(" → ")}
+                </div>
+                <div className="meta">
+                  <span className={`badge t${Math.max(...c.hops.map((h) => h.tier))}`}>{Math.round(c.m.pipeM)} m pipe</span>
+                  <span>{KIND_LABEL[c.kind]}</span>
+                  <span>{fmt.big(c.m.tco2e)} t</span>
+                  <span>{fmt.pct(c.m.coverage)} met</span>
+                  <span>{c.m.payback ? `${c.m.payback.toFixed(0)}y` : "—"}</span>
+                </div>
+              </div>
+            );
+          })}
+          {!chainsBusy && !rankedChains.length && (
+            <div className="note" style={{ padding: 12 }}>
+              No {filters.chainSize}-building chains fit these filters. Try a longer max pipe run per hop or a lower overlap.
+            </div>
+          )}
+        </div>
+      )}
+
+      {!chainMode && <div className="list">
         {ranked.map(({ p, e }) => {
           const s = data.buildings.get(p.s), k = data.buildings.get(p.k);
           return (
@@ -107,7 +157,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, selectedId, 
           );
         })}
         {!ranked.length && <div className="note" style={{ padding: 12 }}>No pairs match these filters.</div>}
-      </div>
+      </div>}
     </aside>
   );
 }

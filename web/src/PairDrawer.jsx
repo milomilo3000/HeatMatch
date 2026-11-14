@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import HeatGrid from "./HeatGrid.jsx";
+import PipeCard from "./PipeCard.jsx";
 import { pairEcon, gridVal, demandAt, fmt, KIND_LABEL, FUEL_LABEL, MONTHS } from "./econ.js";
 
 const TIER_NOTE = {
@@ -156,6 +157,8 @@ export default function PairDrawer({ data, grids, pair, filters, setFilters, hou
           <div className="kpi"><div className="v">{fmt.yr(e.payback)}</div><div className="l">simple payback</div></div>
         </div>
       </div>
+
+      <PipeCard pair={pair} s={s} k={k} A={A} mode={filters.mode} storage={filters.storage} pipeMult={pipeMult} />
 
       <div className="block">
         <h4>When is the heat there, and when is it needed?</h4>
