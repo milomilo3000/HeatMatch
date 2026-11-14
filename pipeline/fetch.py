@@ -26,7 +26,8 @@ def _get(url: str, params: dict | None = None, tries: int = 4) -> requests.Respo
     raise RuntimeError("unreachable")
 
 
-def socrata(ds: str, select: str | None = None, where: str | None = None, page: int = 50_000) -> pd.DataFrame:
+def socrata(ds: str, select: str | None = None, where: str | None = None, page: int = 50_000,
+            base: str = C.SOCRATA) -> pd.DataFrame:
     """Page through a Socrata dataset and return all rows as strings."""
     frames, offset = [], 0
     while True:
@@ -35,7 +36,7 @@ def socrata(ds: str, select: str | None = None, where: str | None = None, page: 
             params["$select"] = select
         if where:
             params["$where"] = where
-        rows = _get(f"{C.SOCRATA}/{ds}.json", params).json()
+        rows = _get(f"{base}/{ds}.json", params).json()
         if not rows:
             break
         frames.append(pd.DataFrame(rows))
@@ -63,7 +64,8 @@ LL84_COLS = ",".join([
     "list_of_all_property_use", "property_gfa_calculated", "year_built",
     "natural_gas_use_kbtu", "electricity_use_grid_purchase", "district_steam_use_kbtu",
     "fuel_oil_2_use_kbtu", "fuel_oil_4_use_kbtu", "site_eui_kbtu_ft", "data_center_it_energy",
-    "data_center_pue", "default_values", "estimated_data_flag", "latitude", "longitude",
+    "data_center_pue", "data_center_it_site_energy", "data_center_gross_floor_area",
+    "default_values", "estimated_data_flag", "latitude", "longitude",
 ])
 
 
@@ -99,6 +101,34 @@ def footprints(bins, refresh=False) -> pd.DataFrame:
 def pluto(bbls, refresh=False) -> pd.DataFrame:
     return cached("pluto", lambda: _in_chunks(
         C.DS_PLUTO, "bbl", bbls, "bbl,ownername,bldgclass,numfloors,unitsres,address"), refresh)
+
+
+# --- street network (for real street crossings on each pipe route) -----------------
+
+def _wkb(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """GeoJSON dict column -> WKB bytes, which parquet stores cleanly."""
+    import shapely
+    from shapely.geometry import shape
+    df = df.dropna(subset=[col]).copy()
+    df["wkb"] = [shapely.to_wkb(shape(g)) for g in df[col]]
+    return df.drop(columns=[col])
+
+
+def streets(refresh=False) -> pd.DataFrame:
+    types = ",".join(f"'{t}'" for t in C.ROAD_TYPES)
+    return cached("streets", lambda: _wkb(socrata(
+        C.DS_CENTERLINE, "the_geom,physicalid,rw_type,streetwidth,full_street_name",
+        f"status='2' AND rw_type in ({types})"), "the_geom"), refresh)
+
+
+def protected_streets(refresh=False) -> pd.DataFrame:
+    return cached("protected_streets", lambda: _wkb(socrata(
+        C.DS_PROTECTED, "the_geom,onstreetna,dateprot_1"), "the_geom"), refresh)
+
+
+def subway_lines(refresh=False) -> pd.DataFrame:
+    return cached("subway_lines", lambda: _wkb(socrata(
+        C.DS_SUBWAY, "geometry,service_name", base=C.SOCRATA_NYS), "geometry"), refresh)
 
 
 # --- NREL hourly shapes -----------------------------------------------------

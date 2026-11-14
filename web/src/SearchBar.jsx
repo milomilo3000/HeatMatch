@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { loadIndex, searchIndex, ROLE_LABEL } from "./search.js";
+import { loadIndex, searchIndex, roleLabel, roleClass } from "./search.js";
 
-export default function SearchBar({ onPick, onClear, value }) {
+export default function SearchBar({ onPick, onClear, value, onAsk, asking }) {
   const [text, setText] = useState("");
   const [index, setIndex] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -59,7 +59,13 @@ export default function SearchBar({ onPick, onClear, value }) {
       {text && (
         <button className="search-clear" onClick={() => { setText(""); setHits([]); onClear(); }} aria-label="Clear search">×</button>
       )}
-      {open && text.trim() && (
+      {onAsk && (
+        <button className={`ask-btn ${asking ? "on" : ""}`} onClick={onAsk} title="Ask HeatMatch by voice or text" aria-label="Ask HeatMatch">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
+          <span>Ask</span>
+        </button>
+      )}
+      {open && text.trim() && !asking && (
         <div className="search-menu">
           {loading && <div className="search-empty">Loading NYC buildings…</div>}
           {!loading && index && !hits.length && (
@@ -72,7 +78,7 @@ export default function SearchBar({ onPick, onClear, value }) {
                 <b>{e.name}</b>
                 <span>{e.address}{e.borough ? `, ${e.borough}` : ""}</span>
               </span>
-              <span className={`role-chip r-${e.role || "none"}`}>{ROLE_LABEL[e.role]}</span>
+              <span className={`role-chip ${roleClass(e.role)}`}>{roleLabel(e.role)}</span>
             </button>
           ))}
         </div>

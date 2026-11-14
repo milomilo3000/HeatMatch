@@ -1,14 +1,12 @@
 import React, { useMemo, useState } from "react";
 import HeatGrid from "./HeatGrid.jsx";
 import PipeCard from "./PipeCard.jsx";
-import { pairEcon, gridVal, demandAt, fmt, KIND_LABEL, FUEL_LABEL, MONTHS } from "./econ.js";
+import { pairEcon, gridVal, demandAt, srcKey, sourceLabel, fmt, FUEL_LABEL, MONTHS } from "./econ.js";
 
-const TIER_NOTE = {
-  1: "Buildings touch — pipe through the party wall, no easement",
-  2: "Same tax block — private easement only, no street work",
-  3: "Across one street — needs a NYC DOT revocable consent",
-  4: "Longer run — multiple lots or streets",
-};
+import { ROUTE, crossingText } from "./pipe.js";
+
+// One line: what the route crosses and what that takes.
+const routeNote = (pair) => `${crossingText(pair).replace(/^./, (c) => c.toUpperCase())}. ${ROUTE[pair.tier].permit}`;
 
 function monthly(g, fn) {
   const out = [];
@@ -24,11 +22,13 @@ export function buildFacts(data, grids, pair, filters, e) {
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
   const gs = grids?.[pair.s], gk = grids?.[pair.k];
   return {
-    source: { name: s.name, address: s.address, borough: s.borough, type: s.type, role: KIND_LABEL[s.source],
+    source: { name: s.name, address: s.address, borough: s.borough, type: s.type, role: sourceLabel(s, pair.track),
+      is_data_center: pair.track === "dc",
       owner: s.owner, cooling_towers: s.towers, data_center_share_of_electricity: s.dc_share },
     sink: { name: k.name, address: k.address, borough: k.borough, type: k.type, owner: k.owner,
       residential_units: k.units, heats_with: FUEL_LABEL[k.fuel] || k.fuel },
-    link: { distance_m: pair.dist_m, tier: TIER_NOTE[pair.tier], serves: filters.mode === "dhw" ? "domestic hot water" : "hot water and space heat",
+    link: { distance_m: pair.dist_m, tier: routeNote(pair), streets_crossed: pair.xnames || [], crosses_protected_street: !!pair.prot,
+      subway_under_street: !!pair.sub, serves: filters.mode === "dhw" ? "domestic hot water" : "hot water and space heat",
       storage_hours: filters.storage, hour_overlap: pair[`coincidence_${filters.mode}`], share_of_sink_demand_covered: pair[`coverage_${filters.mode}`] },
     annual: { heat_reused_mmbtu: Math.round(e.mmbtu), tco2e_avoided: Math.round(e.tco2e), fuel_savings_usd: Math.round(e.fuelUsd),
       heat_pump_electricity_usd: Math.round(e.elecUsd), cooling_tower_water_savings_usd: Math.round(e.waterUsd),
@@ -38,7 +38,7 @@ export function buildFacts(data, grids, pair, filters, e) {
       sink_is_nycha_article_321: e.nycha },
     monthly_mmbtu: gs && gk ? {
       months: MONTHS,
-      source_heat_available: monthly(gs, (g, i) => gridVal(g, "src", i)),
+      source_heat_available: monthly(gs, (g, i) => gridVal(g, srcKey(pair.track), i)),
       sink_heat_demand: monthly(gk, (g, i) => demandAt(g, filters.mode, i)),
     } : null,
   };
@@ -72,7 +72,7 @@ Estimated installed cost is $${(a.installed_cost_range_usd[0] / 1e6).toFixed(1)}
 — HeatMatch NYC (screening estimate, not an engineering design)`;
 }
 
-export default function PairDrawer({ data, grids, pair, filters, setFilters, hour, month, onClose, focusId }) {
+export default function PairDrawer({ data, grids, pair, filters, setFilters, hour, month, onClose, focusId, quote, setQuote }) {
   const A = data.summary.assumptions;
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
   const [elecPrice, setElecPrice] = useState(A.elec_usd_per_kwh);
@@ -82,14 +82,17 @@ export default function PairDrawer({ data, grids, pair, filters, setFilters, hou
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
-  const e = pairEcon(pair, k, A, { mode: filters.mode, storage: filters.storage, elecPrice, pipeMult, includeLL97 });
+  const opts = { mode: filters.mode, storage: filters.storage, elecPrice, pipeMult, includeLL97 };
+  const e = pairEcon(pair, k, A, { ...opts, quote });
+  // what the public-data model said before the owner's numbers were applied
+  const before = pair._owner && data.raw ? pairEcon(pair._orig, data.raw.buildings.get(pair.k), A, opts) : null;
   const gs = grids?.[pair.s], gk = grids?.[pair.k];
 
   const g = useMemo(() => {
     if (!gs || !gk) return null;
     const src = [], dem = [], match = [];
     for (let i = 0; i < 288; i++) {
-      const a = gridVal(gs, "src", i), d = demandAt(gk, filters.mode, i);
+      const a = gridVal(gs, srcKey(pair.track), i), d = demandAt(gk, filters.mode, i);
       src.push(a); dem.push(d); match.push(Math.min(a, d));
     }
     // source on its own scale; demand and matched share one so "covered" reads at a glance
@@ -139,7 +142,7 @@ export default function PairDrawer({ data, grids, pair, filters, setFilters, hou
           <div className="src">
             <div className="tag">{youS ? "You · give heat" : "Gives heat"}</div>
             <div className="who">{s.name}</div>
-            <div className="sub">{KIND_LABEL[s.source]} · {s.owner || "owner n/a"}</div>
+            <div className="sub">{sourceLabel(s, pair.track)} · {s.owner || "owner n/a"}</div>
           </div>
           <div className="mid">→</div>
           <div className="snk">
@@ -150,17 +153,28 @@ export default function PairDrawer({ data, grids, pair, filters, setFilters, hou
         </div>
         <div className="route-line">
           <span className={`badge t${pair.tier}`}>{Math.round(pair.dist_m)} m</span>
-          <span>{TIER_NOTE[pair.tier]}</span>
+          <span>{routeNote(pair)}</span>
         </div>
       </header>
+
+      <div className="est-strip">
+        <b>Screening estimates</b> from public data, not quotes. Concept-stage estimates like these typically land
+        within −50% to +100% of the final cost (AACE Class 5).
+      </div>
 
       <div className="block">
         <div className="kpis two">
           <div className="kpi"><div className="v">{fmt.usdRange(e.capexLow, e.capexHigh)}</div><div className="l">estimated installed cost</div></div>
-          <div className="kpi"><div className="v">{fmt.yrRange(e.paybackLow, e.paybackHigh)}</div><div className="l">simple payback</div></div>
-          <div className="kpi"><div className="v" style={{ color: "var(--heat)" }}>{fmt.usd(e.value)}</div><div className="l">value per year</div></div>
-          <div className="kpi"><div className="v" style={{ color: "var(--good)" }}>{fmt.int(e.tco2e)} t</div><div className="l">CO₂e avoided per year</div></div>
+          <div className="kpi"><div className="v">{fmt.yrRange(e.paybackLow, e.paybackHigh)}</div><div className="l">estimated simple payback</div></div>
+          <div className="kpi"><div className="v" style={{ color: "var(--heat)" }}>{fmt.usd(e.value)}</div><div className="l">estimated value per year</div></div>
+          <div className="kpi"><div className="v" style={{ color: "var(--good)" }}>{fmt.int(e.tco2e)} t</div><div className="l">estimated CO₂e avoided per year</div></div>
         </div>
+        {before && (
+          <div className="before-after">
+            <span className="conf m">Using your data</span> Public-data model said {fmt.usdRange(before.capexLow, before.capexHigh)},
+            {" "}{fmt.yrRange(before.paybackLow, before.paybackHigh)} payback, {fmt.usd(before.value)}/yr.
+          </div>
+        )}
         <button className="cta" style={{ marginTop: 12 }} onClick={draft} disabled={busy}>
           {busy ? "Drafting…" : letter ? "Redraft proposal to both owners" : "Draft proposal to both owners"}
         </button>
@@ -215,7 +229,22 @@ export default function PairDrawer({ data, grids, pair, filters, setFilters, hou
             </div>
           ))}
           <div className="econ-row three total">
-            <span>Total</span><span>{fmt.usd(e.capexLow)}</span><span>{fmt.usd(e.capex)}</span><span>{fmt.usd(e.capexHigh)}</span>
+            <span>{e.cost.quoted ? "Your quote (±10%)" : "Total"}</span><span>{fmt.usd(e.capexLow)}</span><span>{fmt.usd(e.capex)}</span><span>{fmt.usd(e.capexHigh)}</span>
+          </div>
+          {setQuote && (
+            <label className="quote">
+              Have a contractor quote? It replaces the estimate (saved in this browser only).
+              <span>
+                $ <input type="number" min="0" step="10000" value={quote ?? ""} placeholder="e.g. 1800000"
+                  onChange={(ev) => setQuote(ev.target.value === "" ? null : +ev.target.value)} />
+                {quote > 0 && <button onClick={() => setQuote(null)}>remove</button>}
+              </span>
+            </label>
+          )}
+          <div className="note" style={{ marginTop: 8 }}>
+            Street crossings, street widths, protected streets and subway lines come from NYC and MTA open data. The
+            dollar rates are assumptions: pipe cost by diameter from a district-energy planning formula with an NYC
+            premium, street work at 2–4.5× private-property cost, heat pumps at $900–2,100 per kW.
           </div>
 
           <h4 style={{ marginTop: 14 }}>Value per year</h4>

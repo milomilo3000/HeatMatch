@@ -40,5 +40,6 @@ def test_profiles_conserve_annual_energy():
     b = {"sink_kind": "residential", "fuel_gas": 1e6, "fuel_steam": 0.0, "fuel_oil": 0.0, "gas_monthly_ok": False}
     dhw, space = P.sink_profile(b)
     assert abs((dhw + space).sum() - 0.8e6) < 1
-    s = {"source_kind": "datacenter", "elec": 1e6, "dc_elec_share": 1.0, "primary_property_type": "Data Center"}
-    assert abs(P.source_profile(s).sum() - 0.9e6) < 1
+    dc = {"dc_heat_kbtu": 0.9e6}
+    assert abs(P.source_profile(dc, "dc").sum() - 0.9e6) < 1
+    assert np.ptp(P.source_profile(dc, "dc")) == 0  # IT heat is flat around the clock

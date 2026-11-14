@@ -1,9 +1,10 @@
 import React, { useMemo } from "react";
 import { pairEcon, fmt, KIND_LABEL } from "./econ.js";
 
-const TIERS = { 1: "Shared wall", 2: "Same block", 3: "Across street", 4: "Further" };
+const TIERS = { 1: "Shared wall", 2: "No street", 3: "One street", 4: "Several streets" };
 
-export default function Sidebar({ data, filters, setFilters, pairs, totals, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
+export default function Sidebar({ data, filters, setFilters, pairs, totals, tab, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
+  const srcLabel = (b) => (tab === "dc" ? (b.dc_measured ? "Data center · measured" : "Data center · est.") : KIND_LABEL[b.source]);
   const chainMode = filters.chainSize > 2;
   const A = data.summary.assumptions;
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
@@ -34,7 +35,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, sele
     <aside className="sidebar">
       {totals && (
         <div className="summary-line">
-          {fmt.int(totals.pairs)} pairs with positive value · <b>{fmt.big(totals.tco2e)}</b> tCO₂e/yr avoidable
+          {fmt.int(totals.pairs)} pairs with positive value · est. <b>{fmt.big(totals.tco2e)}</b> tCO₂e/yr avoidable
         </div>
       )}
       <section>
@@ -92,16 +93,16 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, sele
         </div>
       </section>
 
-      <section>
+      {tab === "commercial" && <section>
         <div className="row" style={{ marginTop: 0 }}><span>Heat source</span></div>
         <div className="chips">
-          {Object.entries(KIND_LABEL).map(([k, label]) => (
+          {Object.entries(KIND_LABEL).filter(([k]) => k !== "datacenter").map(([k, label]) => (
             <button key={k} className={`chip ${filters.kinds.includes(k) ? "on" : ""}`} onClick={() => toggle("kinds", k)}>
               {label}
             </button>
           ))}
         </div>
-      </section>
+      </section>}
       </details>
 
       <section style={{ paddingBottom: 6 }}>
@@ -132,7 +133,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, sele
                   <span>{KIND_LABEL[c.kind]}</span>
                   <span>{fmt.big(c.m.tco2e)} t</span>
                   <span>{fmt.pct(c.m.coverage)} met</span>
-                  <span>{c.m.payback ? `${c.m.payback.toFixed(0)}y` : "—"}</span>
+                  <span title="Estimated simple payback">{c.m.payback ? `~${c.m.payback.toFixed(0)}y` : "—"}</span>
                 </div>
               </div>
             );
@@ -155,10 +156,10 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, sele
               </div>
               <div className="meta">
                 <span className={`badge t${p.tier}`}>{Math.round(p.dist_m)} m</span>
-                <span>{KIND_LABEL[s.source]}</span>
+                <span>{srcLabel(s)}</span>
                 <span>{fmt.big(e.tco2e)} t</span>
                 <span>{fmt.pct(p[`coincidence_${filters.mode}`])}</span>
-                <span>{e.payback ? `${e.payback.toFixed(0)}y` : "—"}</span>
+                <span title="Estimated simple payback">{e.payback ? `~${e.payback.toFixed(0)}y` : "—"}</span>
               </div>
             </div>
           );

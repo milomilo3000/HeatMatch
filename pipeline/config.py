@@ -12,6 +12,10 @@ DS_LL84_MONTHLY = "fvp3-gcb2"  # LL84 monthly gas + electricity
 DS_COOLING = "y4fw-iqfr"       # DOHMH/DOB cooling tower registrations
 DS_FOOTPRINTS = "5zhs-2jue"    # building footprints with height_roof
 DS_PLUTO = "64uk-42ks"         # PLUTO (owner names)
+DS_CENTERLINE = "inkn-q76z"    # NYC street centerline (CSCL): every street segment with its width
+DS_PROTECTED = "wyih-3nzf"     # DOT protected streets: recently resurfaced blocks (costlier to open)
+SOCRATA_NYS = "https://data.ny.gov/resource"
+DS_SUBWAY = "s692-irgq"        # MTA subway service lines (data.ny.gov)
 
 YEAR = 2024
 
@@ -19,13 +23,22 @@ YEAR = 2024
 OEDI = "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024"
 COMSTOCK_COUNTY = OEDI + "/comstock_amy2018_release_2/timeseries_aggregates/by_county/upgrade=0/county=G3600610/up00-g3600610-{btype}.csv"
 RESSTOCK_STATE = OEDI + "/resstock_amy2018_release_2/timeseries_aggregates/by_state/upgrade=0/state=NY/up00-ny-{btype}.csv"
-COMSTOCK_TYPES = ["largeoffice", "hospital", "largehotel"]
+COMSTOCK_TYPES = ["largeoffice", "hospital", "largehotel", "secondaryschool"]
 RESSTOCK_TYPES = ["multi-family_with_5plus_units"]
 
+# --- two analysis tracks ------------------------------------------------------
+# "dc": data centers. IT load runs 24/7 and is close to fully converted to heat; 26 NYC properties
+#       report a measured IT load in LL84, the rest are estimated from data-center floor area.
+# "commercial": refrigeration, hospitals/labs and cooling-tower buildings. Cooling loads are not
+#       metered anywhere public, so these rely on assumed cooling shares (shown as estimates).
+TRACKS = ("dc", "commercial")
+DC_MIN_FT2 = 2_000              # smaller server rooms aren't worth a heat link
+DC_MIN_HEAT_KBTU = 1_000_000    # ~1,000 MMBtu/yr of rejected heat, same scale as the smallest sink
+DC_IT_HEAT_FACTOR = 1 + 1 / 5.0 # condenser heat = IT load + chiller work (COP ~5)
+
 # --- building roles -------------------------------------------------------
-# Sources run around the clock (process cooling / refrigeration / IT).
+# Commercial-track sources run around the clock (process cooling / refrigeration).
 SOURCE_24_7 = {
-    "Data Center": "datacenter",
     "Supermarket/Grocery Store": "refrigeration",
     "Refrigerated Warehouse": "refrigeration",
     "Wholesale Club/Supercenter": "refrigeration",
@@ -44,6 +57,10 @@ SINK_TYPES = {
     "Senior Living Community": "residential", "Residential Care Facility": "residential",
     "Other - Lodging/Residential": "residential",
     "Hotel": "hotel", "Fitness Center/Health Club/Gym": "hotel",
+    # commercial neighbors that buy a lot of heat (typical next-door buildings of a data center)
+    "Office": "office", "Financial Office": "office", "Medical Office": "office", "Mixed Use Property": "office",
+    "K-12 School": "school", "College/University": "school",
+    "Hospital (General Medical & Surgical)": "hospital",
 }
 SINK_MIN_HEAT_KBTU = 1_000_000  # ~10,000 therms/yr of fossil heat: below this a heat link isn't worth it
 # Fossil heat a sink buys today. Con Ed district steam is fossil-fired, so it counts.
@@ -68,7 +85,11 @@ STORAGE_HOURS = [0, 4, 12] # thermal-storage scenarios precomputed for the UI sl
 MAX_DIST_M = 150
 SHARED_WALL_M = 3
 ONE_STREET_M = 40
-TIER_LABEL = {1: "Shared wall", 2: "Same block", 3: "Across one street", 4: "Further"}
+# Tiers come from the real pipe route (pipeline/streets.py): how many public streets it crosses.
+TIER_LABEL = {1: "Shared wall", 2: "No street to cross", 3: "Crosses one street", 4: "Crosses several streets"}
+ROAD_TYPES = ("1", "2", "3", "9")   # CSCL rw_type: street, highway, bridge, ramp
+HIGHWAY_TYPES = ("2", "3", "9")
+DEFAULT_STREET_FT = 30              # when CSCL has no width for a segment
 PIPE_USD_PER_FT = {1: 800, 2: 800, 3: 2500, 4: 3500}  # trench-ft incl. supply+return, NYC urban
 CONNECTION_FT = 60         # risers / plant-room connections on both ends
 

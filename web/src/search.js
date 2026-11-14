@@ -51,7 +51,7 @@ export function searchIndex(index, query, limit = 8) {
     else if (startsWith(e.addrT, q)) score = 2.5;
     else if (containsAll([...e.nameT, ...e.addrT], q)) score = 1;
     if (!score) continue;
-    score += e.has ? 0.5 : e.id >= 0 ? 0.2 : 0;
+    score += e.has_dc ? 0.6 : e.has_com ? 0.4 : e.id >= 0 ? 0.2 : 0; // data centers and their neighbors first
     hits.push({ e, score });
   }
   hits.sort((a, b) => b.score - a.score || a.e.name.length - b.e.name.length);
@@ -68,9 +68,12 @@ export function searchIndex(index, query, limit = 8) {
   return out;
 }
 
+// Is this search entry a heat source in the given tab? (d = data center, s = commercial source)
+export const isSourceIn = (role, tab) => role.includes(tab === "dc" ? "d" : "s");
+
 // Closest screened buildings with the opposite role (for "no partner passed the screen").
-export function nearbyOpposite(index, entry, radiusM = 400, limit = 5) {
-  const want = entry.role.includes("s") ? "k" : "s";
+export function nearbyOpposite(index, entry, tab, radiusM = 400, limit = 5) {
+  const want = isSourceIn(entry.role, tab) ? "k" : tab === "dc" ? "d" : "s";
   const out = [];
   for (const e of index) {
     if (e.id < 0 || e.id === entry.id || !e.role.includes(want)) continue;
@@ -82,4 +85,11 @@ export function nearbyOpposite(index, entry, radiusM = 400, limit = 5) {
   return out.filter(({ e }) => !seen.has(e.id) && seen.add(e.id)).slice(0, limit);
 }
 
-export const ROLE_LABEL = { s: "Heat source", k: "Heat user", sk: "Source + user", "": "Not a candidate" };
+export function roleLabel(role) {
+  if (role.includes("d")) return "Data center";
+  if (role.includes("s") && role.includes("k")) return "Source + user";
+  if (role.includes("s")) return "Heat source";
+  if (role.includes("k")) return "Heat user";
+  return "Not a candidate";
+}
+export const roleClass = (role) => (role.includes("d") ? "r-d" : role.includes("s") ? "r-s" : role.includes("k") ? "r-k" : "r-none");

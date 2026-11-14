@@ -10,7 +10,7 @@ import time
 
 import pandas as pd
 
-from pipeline import clean, economics, fetch, match
+from pipeline import clean, economics, fetch, match, streets
 from pipeline import config as C
 
 
@@ -28,7 +28,9 @@ def run(refresh=False):
     print("1/6 fetching public data (cached in data/raw)")
     shapes = fetch.nrel_shapes()
     b = clean.buildings(fetch.ll84(refresh=refresh), fetch.ll84_monthly(refresh=refresh), fetch.cooling_towers(refresh=refresh))
-    print(f"    {len(b):,} candidate buildings: {b['source_kind'].notna().sum():,} sources, {b['sink_kind'].notna().sum():,} sinks")
+    print(f"    {len(b):,} candidate buildings: {b['dc_source'].sum():,} data centers "
+          f"({(b['dc_source'] & b['dc_measured']).sum()} with measured IT load), "
+          f"{b['source_kind'].notna().sum():,} commercial sources, {b['sink_kind'].notna().sum():,} heat users")
 
     print("2/6 footprints + owners")
     fp = fetch.footprints(b["bins"].explode().dropna().unique(), refresh=refresh)
@@ -42,20 +44,31 @@ def run(refresh=False):
     b = match.attach_geometry(b, fp)
     print(f"    footprints found for {b['has_footprint'].mean():.0%} of buildings")
 
-    print("3/6 candidate pairs")
-    p = match.candidate_pairs(b)
-    same_owner = (b.loc[p["s"], "owner_key"].to_numpy() == b.loc[p["k"], "owner_key"].to_numpy()) & b.loc[p["s"], "owner_key"].notna().to_numpy()
-    p = p[~same_owner].reset_index(drop=True)
-    print(f"    {len(p):,} pairs within {C.MAX_DIST_M} m  | tiers: {p['tier'].value_counts().sort_index().to_dict()}")
-
-    print("4/6 hourly coincidence (8760 h, storage scenarios)")
-    p, src_prof, sink_prof = match.score_pairs(b, p)
-
-    print("5/6 economics")
+    # Two tracks share the same heat users but have different sources and heat models.
+    masks = {"dc": b["dc_source"], "commercial": b["source_kind"].notna()}
+    print("    loading street network (centerlines, protected streets, subway lines)")
+    net = streets.Streets(refresh)
     fac = economics.sink_factors(b)
-    econ = economics.pair_economics(p, fac)
-    p = p.join(econ)
-    p["portfolio_frac"] = economics.portfolio(p, econ)
+    parts, src_prof, sink_prof = [], {}, {}
+    for track, mask in masks.items():
+        print(f"3/6 [{track}] candidate pairs")
+        p = match.candidate_pairs(b, mask, net)
+        same_owner = (b.loc[p["s"], "owner_key"].to_numpy() == b.loc[p["k"], "owner_key"].to_numpy()) & b.loc[p["s"], "owner_key"].notna().to_numpy()
+        # hospitals next to hospitals are almost always one medical campus on a shared central plant
+        campus = (b.loc[p["s"], "source_kind"].to_numpy() == "hospital") & (b.loc[p["k"], "sink_kind"].to_numpy() == "hospital")
+        p = p[~same_owner & ~campus].reset_index(drop=True)
+        print(f"    {len(p):,} pairs within {C.MAX_DIST_M} m  | tiers: {p['tier'].value_counts().sort_index().to_dict()}"
+              f" | cross a protected street: {int(p['protected'].sum()):,}, a subway street: {int(p['subway'].sum()):,}")
+        print(f"4/6 [{track}] hourly coincidence (8760 h, storage scenarios)")
+        p, src_prof[track], kp = match.score_pairs(b, p, track)
+        sink_prof.update(kp)
+        print(f"5/6 [{track}] economics")
+        econ = economics.pair_economics(p, fac)
+        p = p.join(econ)
+        p["portfolio_frac"] = economics.portfolio(p, econ)
+        p["track"] = track
+        parts.append(p)
+    p = pd.concat(parts, ignore_index=True)
     print(f"    done in {time.time() - t0:.0f}s")
     return b, p, src_prof, sink_prof, fac
 
@@ -64,23 +77,21 @@ def report(b, p):
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 30)
     v = p.assign(src=b.loc[p["s"], "property_name"].str[:28].to_numpy(), src_kind=b.loc[p["s"], "source_kind"].to_numpy(),
-                 sink=b.loc[p["k"], "property_name"].str[:28].to_numpy())
-    cols = ["src", "src_kind", "sink", "dist_m", "tier", "coincidence_all", "coincidence_dhw", "mmbtu", "t_co2e", "net_usd", "value_usd", "capex_usd", "payback_yr"]
-    print("\nTop 20 by tCO2e avoided (tier <= 3):")
-    print(v[v["tier"] <= 3].sort_values("t_co2e", ascending=False)[cols].head(20).round(2).to_string())
-    print("\nCoincidence by source kind (median, mode=all):")
-    print(v.groupby("src_kind")[["coincidence_all", "coincidence_dhw"]].median().round(2))
-    pf = p["portfolio_frac"]
-    print(f"\nCity portfolio: {int((pf > 0).sum())} pairs, {(p['mmbtu'] * pf).sum():,.0f} MMBtu/yr, "
-          f"{(p['t_co2e'] * pf).sum():,.0f} tCO2e/yr, ${(p['value_usd'] * pf).sum():,.0f}/yr value "
-          f"(energy-only ${(p['net_usd'] * pf).sum():,.0f}/yr)")
-    print("Main fuel of portfolio sinks:", b.loc[p.loc[pf > 0, 'k'], 'main_fuel'].value_counts().to_dict())
-    chel = v[v["src"].str.contains("85 10th Ave", na=False) & v["sink"].str.contains("FULTON", na=False)]
-    print("\nChelsea check (85 10th Ave -> Fulton Houses):")
-    print(chel[cols].round(2).to_string() if len(chel) else "    not found")
-    if len(chel):
-        rank = (v[v["tier"] <= 3]["t_co2e"] > chel["t_co2e"].max()).sum() + 1
-        print(f"    rank by tCO2e among tier<=3 pairs: #{rank}")
+                 measured=b.loc[p["s"], "dc_measured"].to_numpy(), sink=b.loc[p["k"], "property_name"].str[:28].to_numpy(),
+                 sink_type=b.loc[p["k"], "sink_kind"].to_numpy())
+    cols = ["src", "sink", "sink_type", "dist_m", "tier", "coincidence_all", "mmbtu", "t_co2e", "value_usd", "payback_yr"]
+    for track in ("dc", "commercial"):
+        t = v[v["track"] == track]
+        pf = t["portfolio_frac"]
+        print(f"\n=== {track}: {len(t):,} pairs, {t['s'].nunique():,} sources, {t['k'].nunique():,} heat users ===")
+        print(t[t["tier"] <= 3].sort_values("t_co2e", ascending=False)[cols + (["measured"] if track == "dc" else ["src_kind"])].head(12).round(2).to_string())
+        print(f"Portfolio: {int((pf > 0).sum())} pairs, {(t['mmbtu'] * pf).sum():,.0f} MMBtu/yr, "
+              f"{(t['t_co2e'] * pf).sum():,.0f} tCO2e/yr, ${(t['value_usd'] * pf).sum():,.0f}/yr value "
+              f"(energy-only ${(t['net_usd'] * pf).sum():,.0f}/yr)")
+        print("Heat-user types:", t["sink_type"].value_counts().to_dict())
+    chel = v[(v["track"] == "dc") & v["src"].str.contains("85 10th Ave|111 Eighth", na=False) & v["sink"].str.fullmatch("FULTON", na=False)]
+    print("\nChelsea check (data-center track, -> Fulton Houses):")
+    print(chel[cols + ["measured"]].round(2).to_string() if len(chel) else "    not found")
 
 
 if __name__ == "__main__":

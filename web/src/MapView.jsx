@@ -55,12 +55,15 @@ function arcPath(s, k) {
 }
 
 export default function MapView({
-  mapRef, data, grids, pairs, mode, focus, partners, selected, chain, onSelect, onPickBuilding,
+  mapRef, data, grids, pairs, mode, tab, focus, partners, selected, chain, onSelect, onPickBuilding,
   hour, month, heatMode, storage, flowMax,
 }) {
   const [time, setTime] = useState(0);
   const [zoom, setZoom] = useState(INITIAL.zoom);
   const searchMode = mode === "search";
+  // what counts as a heat source depends on the tab
+  const isSrc = (b) => (tab === "dc" ? !!b.dc : !!b.source);
+  const srcGrid = tab === "dc" ? "dc" : "src";
 
   useEffect(() => {
     if (LITE) return;
@@ -107,7 +110,7 @@ export default function MapView({
     if (searchMode && focus) {
       if (focusId != null) {
         const fb = get(focusId);
-        items.push({ id: focusId, rgb: fb.source ? SRC_RGB : SNK_RGB, text: `YOUR BUILDING\n${fb.name}`, halo: true });
+        items.push({ id: focusId, rgb: isSrc(fb) ? SRC_RGB : SNK_RGB, text: `YOUR BUILDING\n${fb.name}`, halo: true });
         (partners || []).forEach((p, i) => {
           const other = p.s === focusId ? p.k : p.s;
           items.push({ id: other, rgb: p.s === focusId ? SNK_RGB : SRC_RGB, text: ` ${i + 1} `, big: true, halo: selected === p });
@@ -138,7 +141,7 @@ export default function MapView({
       halos: items.filter((it) => it.halo).map((it) => ({ b: get(it.id), rgb: it.rgb, r: footprintRadius(get(it.id)) })),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchMode, focus, focusId, partners, selected, chain, data, heatMode, storage]);
+  }, [searchMode, focus, focusId, partners, selected, chain, data, heatMode, storage, tab]);
 
   const anyHl = hl.items.length > 0;
   const basePolys = useMemo(() => (anyHl ? polys.filter((d) => !hl.color.has(d.b.id)) : polys), [polys, hl, anyHl]);
@@ -160,7 +163,7 @@ export default function MapView({
   const intensity = (b) => {
     const g = grids?.[b.id];
     if (!g) return 0.7;
-    if (b.source && g.src) return g.src[idx] / 999;
+    if (isSrc(b) && g[srcGrid]) return g[srcGrid][idx] / 999;
     if (g.dhw) return demandAt(g, heatMode, idx) / ((g.dhw_max || 0) + (heatMode === "all" ? g.space_max || 0 : 0) || 1);
     return 0.5;
   };
@@ -171,7 +174,7 @@ export default function MapView({
     if (anyHl) return active.has(b.id) ? [62, 70, 88, 150] : [50, 56, 70, 110];
     if (!active.has(b.id)) return GREY;
     const v = Math.max(0.15, Math.min(1, intensity(b)));
-    const base = b.source ? [255, 70 + 90 * v, 20] : [40, 120 + 40 * v, 255];
+    const base = isSrc(b) ? [255, 70 + 90 * v, 20] : [40, 120 + 40 * v, 255];
     return [...base.map((c) => c * (0.35 + 0.65 * v)), 255];
   };
 
@@ -202,7 +205,7 @@ export default function MapView({
       pickable: true,
       autoHighlight: true,
       highlightColor: [255, 255, 255, 70],
-      updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids] },
+      updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids, tab] },
       onClick: onBuildingClick,
     }),
     anyHl && new PolygonLayer({
@@ -358,7 +361,9 @@ export default function MapView({
   const tooltip = ({ object }) => {
     const b = object?.b;
     if (!b) return null;
-    const role = b.source ? `${KIND_LABEL[b.source]}: rejects heat` : `Heats with ${FUEL_LABEL[b.fuel] || "fossil fuel"}`;
+    const role = tab === "dc" && b.dc
+      ? `Data center: ~${Math.round(b.dc_heat_mmbtu).toLocaleString()} MMBtu/yr of IT heat (${b.dc_measured ? "measured" : "estimated"})`
+      : b.source && tab !== "dc" ? `${KIND_LABEL[b.source]}: rejects heat` : `Heats with ${FUEL_LABEL[b.fuel] || "fossil fuel"}`;
     return {
       html: `<b>${b.name}</b><br/>${b.type}<br/><span style="opacity:.75">${role}</span>`,
       style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3", fontFamily: "Inter, sans-serif", fontSize: "12px" },

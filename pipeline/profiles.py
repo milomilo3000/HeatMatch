@@ -52,7 +52,10 @@ def shape(name: str):
 
 
 FUEL_EFF = {lab: eff for lab, _t, _p, eff in C.FUELS.values()}
-SINK_SHAPE = {"residential": "multifamily", "hotel": "largehotel"}
+SINK_SHAPE = {
+    "residential": "multifamily", "hotel": "largehotel", "office": "largeoffice",
+    "school": "secondaryschool", "hospital": "hospital",
+}
 SOURCE_SHAPE = {"office": "largeoffice", "hospital": "hospital"}
 
 
@@ -77,17 +80,20 @@ def sink_profile(b) -> tuple[np.ndarray, np.ndarray]:
     return dhw_m[MONTH] * s["dhw"]["w"], space_m[MONTH] * s["heating"]["w"]
 
 
-def source_profile(b) -> np.ndarray:
-    """Heat rejected to the sky today (kBtu/h)."""
+def source_profile(b, track: str = "commercial") -> np.ndarray:
+    """Heat rejected to the sky today (kBtu/h).
+
+    dc:         the data center's IT heat (measured or estimated, see clean.py), flat around the clock.
+    commercial: refrigeration / hospital / cooling-tower heat, excluding any data-center floor.
+    """
+    if track == "dc":
+        return np.full(8760, float(b["dc_heat_kbtu"]) / 8760)
+
     kind, elec = b["source_kind"], float(b["elec"])
-    dc_share = max(float(b.get("dc_elec_share", 0) or 0), 0.8 if b["primary_property_type"] == "Data Center" else 0)
-    flat = np.full(8760, 1 / 8760)
+    dc_share = float(b.get("dc_elec_share", 0) or 0)
     diurnal = 1 + 0.08 * np.sin((HOUR - 9) / 24 * 2 * np.pi)       # small daytime bump
     diurnal = diurnal / diurnal.sum()
-
     heat = np.zeros(8760)
-    if kind == "datacenter" or dc_share > 0:
-        heat += elec * dc_share * C.DATACENTER_HEAT_SHARE * flat
     if kind == "refrigeration":
         heat += elec * C.REFRIG_ELEC_SHARE * (1 + C.REFRIG_COP) * diurnal
     if kind in SOURCE_SHAPE:

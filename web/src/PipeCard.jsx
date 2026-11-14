@@ -1,11 +1,12 @@
 import React from "react";
-import { pipeSpec, ROUTE, LOOP } from "./pipe.js";
-import { fmt } from "./econ.js";
+import { pipeSpec, ROUTE, LOOP, routeHow } from "./pipe.js";
+import { fmt, pipeCost } from "./econ.js";
 
 // "How this pipe works": a schematic plus the four physical steps, with this pair's numbers.
 export default function PipeCard({ pair, s, k, A, mode, storage, pipeMult }) {
   const p = pipeSpec(pair, A, { mode, storage, pipeMult });
-  const route = ROUTE[pair.tier];
+  const route = { ...ROUTE[pair.tier], how: routeHow(pair) };
+  const cost = pipeCost(pair, p.deliveredKw, A, pipeMult);
   const use = mode === "dhw" ? "hot-water tank" : "hot-water tank + heating loop";
   const short = (t, n = 22) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
 
@@ -64,7 +65,7 @@ export default function PipeCard({ pair, s, k, A, mode, storage, pipeMult }) {
       <div className="econ-row"><span>Route</span><span>{route.how}</span></div>
       <div className="econ-row"><span>Permits</span><span style={{ maxWidth: 230, textAlign: "right" }}>{route.permit}</span></div>
       <div className="econ-row"><span>Peak flow · pipe size</span><span>{fmt.int(p.gpm)} gpm · 2 × {p.nominalIn}″</span></div>
-      <div className="econ-row"><span>Pipe cost ({fmt.int(p.lengthFt)} ft incl. connections)</span><span>{fmt.usd(p.costUsd)}</span></div>
+      <div className="econ-row"><span>Est. pipe cost ({fmt.int(p.lengthFt)} ft incl. connections{cost.streetFt ? `, ${fmt.int(cost.streetFt)} ft in the street` : ""})</span><span>{fmt.usdRange(cost.total[0], cost.total[2])}</span></div>
       <div className="note" style={{ marginTop: 6 }}>
         Route drawn wall-to-wall in a straight line; a real run would follow the street grid. Pipe sized for {LOOP.velocityMps} m/s
         at a {LOOP.supplyF - LOOP.returnF}°F temperature drop.
