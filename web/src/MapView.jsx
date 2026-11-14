@@ -5,7 +5,22 @@ import { MapboxOverlay } from "@deck.gl/mapbox";
 import { PolygonLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
 import { demandAt, flowAt, KIND_LABEL, FUEL_LABEL } from "./econ.js";
-import { nearestWalls, midpoint, pipeSpec, footprintRadius } from "./pipe.js";
+import { nearestWalls, midpoint, footprintRadius } from "./pipe.js";
+
+function shortLabel(name, max = 20) {
+  const n = String(name || "").trim();
+  if (n.length <= max) return n;
+  return `${n.slice(0, max - 1)}…`;
+}
+
+function buildingKind(b) {
+  if (b.source) return KIND_LABEL[b.source] || b.type || "Heat source";
+  return b.type || "Heat user";
+}
+
+function mapTag(b) {
+  return `${shortLabel(b.name)}\n${buildingKind(b)}`;
+}
 
 const SRC_RGB = [255, 140, 40];
 const SNK_RGB = [70, 165, 255];
@@ -90,47 +105,96 @@ export default function MapView({
     return out;
   }, [data]);
 
-  // Pairs drawn as sky arcs. With a searched building, its partners are always included.
+  // Arcs: when a pair is selected, show only that link. With a search focus, show its partners.
+  // Otherwise citywide arcs (capped).
   const shown = useMemo(() => {
-    const list = pairs.slice(0, 2500);
-    for (const p of [...(partners || []), selected].filter(Boolean)) if (!list.includes(p)) list.push(p);
-    return list;
-  }, [pairs, partners, selected]);
+    if (selected) return [selected];
+    if (searchMode && partners?.length) return partners;
+    return pairs.slice(0, 1800);
+  }, [pairs, partners, selected, searchMode]);
   const partnerSet = useMemo(() => new Set((partners || []).map((p) => p.id)), [partners]);
   const focusId = focus && focus.id >= 0 && get(focus.id) ? focus.id : null;
-  const emphasized = (p) => (focusId != null ? partnerSet.has(p.id) : selected ? p === selected : true);
+  const emphasized = (p) => (selected ? p === selected : focusId != null ? partnerSet.has(p.id) : true);
 
-  // --- highlighted buildings, labels, halos and ground pipes for the current selection
+  // Orange = gives heat (source). Blue = needs heat (sink).
+  // Search: light your building + all partners. After a partner click: only that pair.
   const hl = useMemo(() => {
     const items = [], segs = [];
     const seg = (from, to, dist) => segs.push({ route: nearestWalls(get(from), get(to)), dist });
-    if (searchMode && focus) {
-      if (focusId != null) {
-        const fb = get(focusId);
-        items.push({ id: focusId, rgb: fb.source ? SRC_RGB : SNK_RGB, text: `YOUR BUILDING\n${fb.name}`, halo: true });
-        (partners || []).forEach((p, i) => {
-          const other = p.s === focusId ? p.k : p.s;
-          items.push({ id: other, rgb: p.s === focusId ? SNK_RGB : SRC_RGB, text: ` ${i + 1} `, big: true, halo: selected === p });
-        });
-      }
-      if (selected) seg(selected.s, selected.k, selected.dist_m);
-    } else if (chain) {
-      chain.ids.forEach((id, i) => items.push({ id, rgb: i ? SNK_RGB : SRC_RGB, text: i ? ` ${i} ` : " S ", big: true, halo: true }));
-      chain.hops.forEach((h) => seg(h.from, h.to, h.dist));
-    } else if (selected) {
-      items.push({ id: selected.s, rgb: SRC_RGB, text: `HEAT SOURCE\n${get(selected.s).name}`, halo: true });
-      items.push({ id: selected.k, rgb: SNK_RGB, text: `HEAT USER\n${get(selected.k).name}`, halo: true });
+    if (searchMode && focus && focusId != null && selected) {
+      const partnerId = selected.s === focusId ? selected.k : selected.s;
+      const youGiveHeat = focusId === selected.s;
+      const partnerGivesHeat = partnerId === selected.s;
+      const fb = get(focusId), pb = get(partnerId);
+      // Name + building type; offsets keep close buildings from stacking
+      items.push({
+        id: focusId,
+        rgb: youGiveHeat ? SRC_RGB : SNK_RGB,
+        text: mapTag(fb),
+        halo: true,
+        side: "focus",
+      });
+      items.push({
+        id: partnerId,
+        rgb: partnerGivesHeat ? SRC_RGB : SNK_RGB,
+        text: mapTag(pb),
+        halo: true,
+        side: "partner",
+      });
       seg(selected.s, selected.k, selected.dist_m);
+    } else if (searchMode && focus && focusId != null) {
+      const fb = get(focusId);
+      items.push({
+        id: focusId,
+        rgb: fb.source ? SRC_RGB : SNK_RGB,
+        text: mapTag(fb),
+        halo: true,
+        side: "focus",
+      });
+      (partners || []).forEach((p, i) => {
+        const other = p.s === focusId ? p.k : p.s;
+        if (other === focusId || items.some((it) => it.id === other)) return;
+        const partnerGivesHeat = p.s === other;
+        const ob = get(other);
+        items.push({
+          id: other,
+          rgb: partnerGivesHeat ? SRC_RGB : SNK_RGB,
+          text: `${i + 1}\n${shortLabel(ob.name, 16)}`,
+          big: true,
+          halo: true,
+          side: "partner",
+          idx: i,
+        });
+      });
+    } else if (selected && !chain) {
+      items.push({ id: selected.s, rgb: SRC_RGB, text: mapTag(get(selected.s)), halo: true, side: "west" });
+      items.push({ id: selected.k, rgb: SNK_RGB, text: mapTag(get(selected.k)), halo: true, side: "east" });
+      seg(selected.s, selected.k, selected.dist_m);
+    } else if (chain) {
+      chain.ids.forEach((id, i) => items.push({ id, rgb: i ? SNK_RGB : SRC_RGB, text: i ? `${i}` : "S", big: true, halo: true, idx: i }));
+      chain.hops.forEach((h) => seg(h.from, h.to, h.dist));
     }
-    const spec = selected ? pipeSpec(selected, data.summary.assumptions, { mode: heatMode, storage }) : null;
+    // Push labels apart in screen space so close buildings don't stack
     const labels = items.map((it) => {
       const b = get(it.id);
-      return { pos: [b.lon, b.lat, (b.height_m || 10) + 10], text: it.text, rgb: it.rgb, big: it.big };
+      let offset = [0, -18];
+      if (items.length >= 2 && (it.side === "focus" || it.side === "partner" || it.side === "west" || it.side === "east")) {
+        const other = items.find((x) => x.id !== it.id);
+        if (other) {
+          const ob = get(other.id);
+          const east = b.lon >= ob.lon;
+          offset = [east ? 72 : -72, it.side === "focus" || it.side === "west" ? -52 : 36];
+        }
+      } else if (it.idx != null) {
+        const ang = (it.idx * 2.2) % 6.28;
+        offset = [Math.round(Math.cos(ang) * 42), Math.round(Math.sin(ang) * 28) - 12];
+      }
+      return { pos: [b.lon, b.lat, (b.height_m || 10) + 10], text: it.text, rgb: it.rgb, big: it.big, offset };
     });
     if (selected && !chain)
       segs.forEach((g) => labels.push({
-        pos: midpoint(g.route, 5), offset: [0, -40], rgb: [255, 226, 180],
-        text: `${Math.round(g.dist)} m pipe · 2 × ${spec.nominalIn}″`,
+        pos: midpoint(g.route, 5), offset: [0, 44], rgb: [255, 226, 180],
+        text: `~${Math.round(g.dist * 3.281)} ft`,
       }));
     return {
       items, segs, labels,
@@ -138,7 +202,7 @@ export default function MapView({
       halos: items.filter((it) => it.halo).map((it) => ({ b: get(it.id), rgb: it.rgb, r: footprintRadius(get(it.id)) })),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchMode, focus, focusId, partners, selected, chain, data, heatMode, storage]);
+  }, [searchMode, focus, focusId, partners, selected, chain, data]);
 
   const anyHl = hl.items.length > 0;
   const basePolys = useMemo(() => (anyHl ? polys.filter((d) => !hl.color.has(d.b.id)) : polys), [polys, hl, anyHl]);
@@ -165,7 +229,7 @@ export default function MapView({
     return 0.5;
   };
 
-  // Search mode: the whole city is grey. All-candidates mode: sources orange, users blue.
+  // Search: grey city (highlights handled separately). Citywide: sources orange, users blue.
   const buildingColor = ({ b }) => {
     if (searchMode) return anyHl ? [56, 62, 78, 170] : GREY;
     if (anyHl) return active.has(b.id) ? [62, 70, 88, 150] : [50, 56, 70, 110];
@@ -358,7 +422,9 @@ export default function MapView({
   const tooltip = ({ object }) => {
     const b = object?.b;
     if (!b) return null;
-    const role = b.source ? `${KIND_LABEL[b.source]}: rejects heat` : `Heats with ${FUEL_LABEL[b.fuel] || "fossil fuel"}`;
+    const role = b.source
+      ? `Gives away heat (${KIND_LABEL[b.source]})`
+      : `Needs heat (${FUEL_LABEL[b.fuel] || "fossil fuel"})`;
     return {
       html: `<b>${b.name}</b><br/>${b.type}<br/><span style="opacity:.75">${role}</span>`,
       style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3", fontFamily: "Inter, sans-serif", fontSize: "12px" },

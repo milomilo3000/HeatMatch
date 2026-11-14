@@ -82,4 +82,4 @@ export function nearbyOpposite(index, entry, radiusM = 400, limit = 5) {
   return out.filter(({ e }) => !seen.has(e.id) && seen.add(e.id)).slice(0, limit);
 }
 
-export const ROLE_LABEL = { s: "Heat source", k: "Heat user", sk: "Source + user", "": "Not a candidate" };
+export const ROLE_LABEL = { s: "Gives heat", k: "Needs heat", sk: "Gives + needs", "": "Not a match" };

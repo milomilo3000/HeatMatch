@@ -16,13 +16,12 @@ export default function TimeBar({ hour, setHour, month, setMonth, pairs, grids, 
   const idx = month * 24 + hour;
   const now = useMemo(() => {
     if (!grids) return null;
-    let flowing = 0, kbtu = 0;
+    let flowing = 0;
     for (const p of pairs) {
       const v = flowAt(p, grids, mode, idx);
-      kbtu += v;
-      if (v > 0.25 * (flowMax.get(p.id) || 1)) flowing += 1; // running at >25% of its own peak
+      if (v > 0.25 * (flowMax.get(p.id) || 1)) flowing += 1;
     }
-    return { flowing, mmbtuh: kbtu / 1000 };
+    return { flowing };
   }, [pairs, grids, idx, mode, flowMax]);
 
   return (
@@ -42,12 +41,9 @@ export default function TimeBar({ hour, setHour, month, setMonth, pairs, grids, 
         ))}
       </div>
       <div className="flowing">
-        {now ? (
-          <>
-            <b>{now.flowing.toLocaleString()}</b> of {pairs.length.toLocaleString()} pairs running above 25% of peak<br />
-            <b>{now.mmbtuh.toFixed(1)}</b> MMBtu/h moving right now
-          </>
-        ) : "loading hourly profiles…"}
+        {now
+          ? <><b>{now.flowing.toLocaleString()}</b> matches active now</>
+          : "Loading…"}
       </div>
     </div>
   );

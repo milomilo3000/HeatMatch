@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import MapView, { INITIAL } from "./MapView.jsx";
 import Sidebar from "./Sidebar.jsx";
-import PairDrawer from "./PairDrawer.jsx";
+import PairDrawer, { heatMatchScore } from "./PairDrawer.jsx";
 import ChainDrawer from "./ChainDrawer.jsx";
 import TimeBar from "./TimeBar.jsx";
 import SearchBar from "./SearchBar.jsx";
@@ -41,7 +41,7 @@ export default function App() {
   const [view, setView] = useState("search"); // "search" (default) | "all" (every candidate)
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [focus, setFocus] = useState(null); // the searched building (a search-index entry)
-  const [searchMaxDist, setSearchMaxDist] = useState(100);
+  const searchMaxDist = 150; // fixed partner search radius; no distance UI
   const [nearby, setNearby] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [hour, setHour] = useState(19);
@@ -89,9 +89,16 @@ export default function App() {
       .filter((p) => (p.s === focus.id || p.k === focus.id) && p.dist_m <= searchMaxDist)
       .map((p) => {
         const youAreSource = p.s === focus.id;
-        return { p, youAreSource, other: data.buildings.get(youAreSource ? p.k : p.s), e: pairEcon(p, data.buildings.get(p.k), A, opts) };
+        const e = pairEcon(p, data.buildings.get(p.k), A, opts);
+        return {
+          p,
+          youAreSource,
+          other: data.buildings.get(youAreSource ? p.k : p.s),
+          e,
+          match: heatMatchScore(p, e, filters.mode),
+        };
       })
-      .sort((a, b) => (a.e.payback ?? 1e9) - (b.e.payback ?? 1e9) || b.e.value - a.e.value);
+      .sort((a, b) => b.match.score - a.match.score || (a.e.payback ?? 1e9) - (b.e.payback ?? 1e9));
   }, [data, A, focus, searchMaxDist, filters.mode, filters.storage]);
   const partnerPairs = useMemo(() => partnerRows.map((r) => r.p), [partnerRows]);
 
@@ -185,7 +192,7 @@ export default function App() {
       if (e.key === "c") {
         const fultonId = data.pairById.get(data.summary.bookmarks.chelsea[0])?.k;
         const b = data.buildings.get(fultonId);
-        if (b) { setSearchMaxDist(150); pickEntry(entryFromBuilding(b)); }
+        if (b) pickEntry(entryFromBuilding(b));
       }
       if (e.key === "o") clearFocus();
     }
@@ -223,27 +230,81 @@ export default function App() {
         <div className="wordmark">Heat<span>Match</span><small>NYC</small></div>
         <div className="search-wrap">
           <SearchBar value={focus} onPick={pickEntry} onClear={clearFocus} />
-          {searchMode && !focus && <div className="search-hint">Try “111 Eighth Avenue” or “Fulton”, or press <kbd>c</kbd></div>}
+          {searchMode && !focus && (
+            <div className="search-hint">Find a heat-sharing partner for one building</div>
+          )}
+          {!searchMode && (
+            <div className="search-hint">Citywide screening for planners</div>
+          )}
         </div>
-        <label className="toggle" title="Show every candidate pair in the city">
-          <input type="checkbox" checked={!searchMode} onChange={(e) => switchView(e.target.checked ? "all" : "search")} />
-          <span className="track"><span className="thumb" /></span>
-          <span>All candidates</span>
-        </label>
+        <div className="mode-switch" role="group" aria-label="View mode">
+          <button
+            type="button"
+            className={searchMode ? "on" : ""}
+            onClick={() => switchView("search")}
+            title="Find partners for one building"
+          >
+            My building
+          </button>
+          <button
+            type="button"
+            className={!searchMode ? "on" : ""}
+            onClick={() => switchView("all")}
+            title="Browse every match citywide"
+          >
+            Citywide
+          </button>
+        </div>
       </header>
 
-      {searchMode && focus && (
+      {searchMode && !focus && (
+        <div className="empty-tip compact">
+          <p>Search a building to see nearby partners worth contacting.</p>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => {
+              const fultonId = data.pairById.get(data.summary.bookmarks.chelsea[0])?.k;
+              const b = data.buildings.get(fultonId);
+              if (b) pickEntry(entryFromBuilding(b));
+            }}
+          >
+            Try Chelsea / Fulton example
+          </button>
+          <div className="empty-legend">
+            <span><i className="lg-heat" /> Gives heat</span>
+            <span><i className="lg-cold" /> Needs heat</span>
+          </div>
+        </div>
+      )}
+
+      {searchMode && focus && !selected && (
         <ResultsPanel
           entry={focus}
           building={focus.id >= 0 ? data.buildings.get(focus.id) : null}
           partners={partnerRows}
           nearby={nearby}
-          maxDist={searchMaxDist}
-          setMaxDist={setSearchMaxDist}
           mode={filters.mode}
           setMode={(m) => setFilters((f) => ({ ...f, mode: m }))}
           selectedId={selectedId}
           onSelect={selectPair}
+          onClose={clearFocus}
+        />
+      )}
+
+      {searchMode && focus && selected && (
+        <PairDrawer
+          key={selected.id}
+          data={data}
+          grids={grids}
+          pair={selected}
+          filters={filters}
+          setFilters={setFilters}
+          hour={hour}
+          month={month}
+          focusEntry={focus}
+          embedded
+          onBack={() => setSelectedId(null)}
           onClose={clearFocus}
         />
       )}
@@ -264,7 +325,7 @@ export default function App() {
         />
       )}
 
-      {selected && (
+      {!searchMode && selected && (
         <PairDrawer
           key={selected.id}
           data={data}
@@ -274,7 +335,6 @@ export default function App() {
           setFilters={setFilters}
           hour={hour}
           month={month}
-          focusId={searchMode ? focus?.id : null}
           onClose={() => setSelectedId(null)}
         />
       )}
@@ -282,6 +342,22 @@ export default function App() {
       {!searchMode && selectedChain && (
         <ChainDrawer key={selectedChain.key} data={data} grids={grids} chain={selectedChain} filters={filters}
           hour={hour} month={month} onClose={() => setChainKey(null)} />
+      )}
+
+      {!searchMode && !selected && !selectedChain && (
+        <div className="map-legend">
+          <div className="eyebrow">Map index</div>
+          <div className="legend-row"><i className="lg-heat" /> Gives heat</div>
+          <div className="legend-row"><i className="lg-cold" /> Needs heat</div>
+        </div>
+      )}
+
+      {searchMode && focus && !selected && (
+        <div className="map-legend">
+          <div className="legend-row"><i className="lg-heat" /> Gives heat</div>
+          <div className="legend-row"><i className="lg-cold" /> Needs heat</div>
+          <div className="note">Click a partner to focus just that match</div>
+        </div>
       )}
 
       {!searchMode && (

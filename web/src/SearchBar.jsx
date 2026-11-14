@@ -50,11 +50,11 @@ export default function SearchBar({ onPick, onClear, value }) {
       </svg>
       <input
         value={text}
-        placeholder="Find energy-sharing partners for your building…"
+        placeholder="Search your building by name or address…"
         onFocus={() => { ensureIndex(); setOpen(true); }}
         onChange={(e) => { setText(e.target.value); setOpen(true); }}
         onKeyDown={onKey}
-        aria-label="Search for your building by name or address"
+        aria-label="Search your building by name or address"
       />
       {text && (
         <button className="search-clear" onClick={() => { setText(""); setHits([]); onClear(); }} aria-label="Clear search">×</button>
