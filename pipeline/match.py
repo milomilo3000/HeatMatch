@@ -44,9 +44,10 @@ def attach_geometry(b: pd.DataFrame, fp: pd.DataFrame) -> pd.DataFrame:
     return b
 
 
-def candidate_pairs(b: pd.DataFrame) -> pd.DataFrame:
-    """Edge-to-edge distance between every source and sink within MAX_DIST_M."""
-    src = b.index[b["source_kind"].notna()].to_numpy()
+def candidate_pairs(b: pd.DataFrame, source_mask: pd.Series, streets=None) -> pd.DataFrame:
+    """Edge-to-edge distance between every source and sink within MAX_DIST_M, and what the
+    straight pipe route between them crosses (streets: a pipeline.streets.Streets)."""
+    src = b.index[source_mask.reindex(b.index, fill_value=False)].to_numpy()
     snk = b.index[b["sink_kind"].notna()].to_numpy()
     tree = shapely.STRtree(b.loc[snk, "geom_ft"].to_numpy())
     qi, ti = tree.query(b.loc[src, "geom_ft"].to_numpy(), predicate="dwithin", distance=C.MAX_DIST_M * FT_PER_M)
@@ -62,11 +63,18 @@ def candidate_pairs(b: pd.DataFrame) -> pd.DataFrame:
     same_lot = [overlap(b.at[s, "bbls"], b.at[k, "bbls"]) for s, k in zip(p["s"], p["k"])]
     p = p[~np.array(same_parent) & ~np.array(same_lot)]
 
-    blocks = b["bbls"].map(lambda x: {v[:6] for v in x})
-    same_block = np.array([bool(blocks[s] & blocks[k]) for s, k in zip(p["s"], p["k"])], dtype=bool)
+    p = p.reset_index(drop=True)
     d = p["dist_m"].to_numpy()
-    p["tier"] = np.select([d <= C.SHARED_WALL_M, same_block, d <= C.ONE_STREET_M], [1, 2, 3], 4)
-    return p.reset_index(drop=True)
+    if streets is None:  # fallback heuristic: tax block + distance
+        blocks = b["bbls"].map(lambda x: {v[:6] for v in x})
+        same_block = np.array([bool(blocks[s] & blocks[k]) for s, k in zip(p["s"], p["k"])], dtype=bool)
+        p["tier"] = np.select([d <= C.SHARED_WALL_M, same_block, d <= C.ONE_STREET_M], [1, 2, 3], 4)
+        return p
+    x = streets.analyze(b.loc[p["s"], "geom_ft"].to_numpy(), b.loc[p["k"], "geom_ft"].to_numpy())
+    p = pd.concat([p, x], axis=1)
+    one = (p["n_cross"] == 1) & ~p["highway"]
+    p["tier"] = np.select([d <= C.SHARED_WALL_M, p["n_cross"] == 0, one], [1, 2, 3], 4)
+    return p
 
 
 def simulate(avail: np.ndarray, demand: np.ndarray, cap: np.ndarray | float) -> np.ndarray:
@@ -85,9 +93,9 @@ def simulate(avail: np.ndarray, demand: np.ndarray, cap: np.ndarray | float) -> 
     return out
 
 
-def score_pairs(b: pd.DataFrame, p: pd.DataFrame, batch: int = 400):
+def score_pairs(b: pd.DataFrame, p: pd.DataFrame, track: str = "commercial", batch: int = 400):
     """Coincidence metrics for each pair. Returns (pairs with metrics, source profiles, sink profiles)."""
-    src_prof = {i: P.deliverable(P.source_profile(b.loc[i])) for i in p["s"].unique()}
+    src_prof = {i: P.deliverable(P.source_profile(b.loc[i], track)) for i in p["s"].unique()}
     sink_prof = {i: P.sink_profile(b.loc[i]) for i in p["k"].unique()}
     rows = []
     for start in range(0, len(p), batch):

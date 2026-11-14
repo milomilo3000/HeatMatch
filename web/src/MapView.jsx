@@ -13,13 +13,14 @@ function shortLabel(name, max = 20) {
   return `${n.slice(0, max - 1)}…`;
 }
 
-function buildingKind(b) {
+function buildingKind(b, tab) {
+  if (tab === "dc" && b.dc) return b.dc_measured ? "Data center · measured" : "Data center · est.";
   if (b.source) return KIND_LABEL[b.source] || b.type || "Heat source";
   return b.type || "Heat user";
 }
 
-function mapTag(b) {
-  return `${shortLabel(b.name)}\n${buildingKind(b)}`;
+function mapTag(b, tab) {
+  return `${shortLabel(b.name)}\n${buildingKind(b, tab)}`;
 }
 
 const SRC_RGB = [255, 140, 40];
@@ -70,12 +71,14 @@ function arcPath(s, k) {
 }
 
 export default function MapView({
-  mapRef, data, grids, pairs, mode, focus, partners, selected, chain, onSelect, onPickBuilding,
+  mapRef, data, grids, pairs, mode, tab, focus, partners, selected, chain, onSelect, onPickBuilding,
   hour, month, heatMode, storage, flowMax,
 }) {
   const [time, setTime] = useState(0);
   const [zoom, setZoom] = useState(INITIAL.zoom);
   const searchMode = mode === "search";
+  const isSrc = (b) => (tab === "dc" ? !!b.dc : !!b.source);
+  const srcGrid = tab === "dc" ? "dc" : "src";
 
   useEffect(() => {
     if (LITE) return;
@@ -130,14 +133,14 @@ export default function MapView({
       items.push({
         id: focusId,
         rgb: youGiveHeat ? SRC_RGB : SNK_RGB,
-        text: mapTag(fb),
+        text: mapTag(fb, tab),
         halo: true,
         side: "focus",
       });
       items.push({
         id: partnerId,
         rgb: partnerGivesHeat ? SRC_RGB : SNK_RGB,
-        text: mapTag(pb),
+        text: mapTag(pb, tab),
         halo: true,
         side: "partner",
       });
@@ -146,8 +149,8 @@ export default function MapView({
       const fb = get(focusId);
       items.push({
         id: focusId,
-        rgb: fb.source ? SRC_RGB : SNK_RGB,
-        text: mapTag(fb),
+        rgb: isSrc(fb) ? SRC_RGB : SNK_RGB,
+        text: mapTag(fb, tab),
         halo: true,
         side: "focus",
       });
@@ -167,8 +170,8 @@ export default function MapView({
         });
       });
     } else if (selected && !chain) {
-      items.push({ id: selected.s, rgb: SRC_RGB, text: mapTag(get(selected.s)), halo: true, side: "west" });
-      items.push({ id: selected.k, rgb: SNK_RGB, text: mapTag(get(selected.k)), halo: true, side: "east" });
+      items.push({ id: selected.s, rgb: SRC_RGB, text: mapTag(get(selected.s), tab), halo: true, side: "west" });
+      items.push({ id: selected.k, rgb: SNK_RGB, text: mapTag(get(selected.k), tab), halo: true, side: "east" });
       seg(selected.s, selected.k, selected.dist_m);
     } else if (chain) {
       chain.ids.forEach((id, i) => items.push({ id, rgb: i ? SNK_RGB : SRC_RGB, text: i ? `${i}` : "S", big: true, halo: true, idx: i }));
@@ -202,7 +205,7 @@ export default function MapView({
       halos: items.filter((it) => it.halo).map((it) => ({ b: get(it.id), rgb: it.rgb, r: footprintRadius(get(it.id)) })),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchMode, focus, focusId, partners, selected, chain, data]);
+  }, [searchMode, focus, focusId, partners, selected, chain, data, tab]);
 
   const anyHl = hl.items.length > 0;
   const basePolys = useMemo(() => (anyHl ? polys.filter((d) => !hl.color.has(d.b.id)) : polys), [polys, hl, anyHl]);
@@ -224,7 +227,7 @@ export default function MapView({
   const intensity = (b) => {
     const g = grids?.[b.id];
     if (!g) return 0.7;
-    if (b.source && g.src) return g.src[idx] / 999;
+    if (isSrc(b) && g[srcGrid]) return g[srcGrid][idx] / 999;
     if (g.dhw) return demandAt(g, heatMode, idx) / ((g.dhw_max || 0) + (heatMode === "all" ? g.space_max || 0 : 0) || 1);
     return 0.5;
   };
@@ -235,7 +238,7 @@ export default function MapView({
     if (anyHl) return active.has(b.id) ? [62, 70, 88, 150] : [50, 56, 70, 110];
     if (!active.has(b.id)) return GREY;
     const v = Math.max(0.15, Math.min(1, intensity(b)));
-    const base = b.source ? [255, 70 + 90 * v, 20] : [40, 120 + 40 * v, 255];
+    const base = isSrc(b) ? [255, 70 + 90 * v, 20] : [40, 120 + 40 * v, 255];
     return [...base.map((c) => c * (0.35 + 0.65 * v)), 255];
   };
 
@@ -266,7 +269,7 @@ export default function MapView({
       pickable: true,
       autoHighlight: true,
       highlightColor: [255, 255, 255, 70],
-      updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids] },
+      updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids, tab] },
       onClick: onBuildingClick,
     }),
     anyHl && new PolygonLayer({
@@ -422,9 +425,11 @@ export default function MapView({
   const tooltip = ({ object }) => {
     const b = object?.b;
     if (!b) return null;
-    const role = b.source
-      ? `Gives away heat (${KIND_LABEL[b.source]})`
-      : `Needs heat (${FUEL_LABEL[b.fuel] || "fossil fuel"})`;
+    const role = tab === "dc" && b.dc
+      ? `Data center: ~${Math.round(b.dc_heat_mmbtu).toLocaleString()} MMBtu/yr of IT heat (${b.dc_measured ? "measured" : "estimated"})`
+      : isSrc(b)
+        ? `Gives away heat (${KIND_LABEL[b.source] || "source"})`
+        : `Needs heat (${FUEL_LABEL[b.fuel] || "fossil fuel"})`;
     return {
       html: `<b>${b.name}</b><br/>${b.type}<br/><span style="opacity:.75">${role}</span>`,
       style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3", fontFamily: "Inter, sans-serif", fontSize: "12px" },

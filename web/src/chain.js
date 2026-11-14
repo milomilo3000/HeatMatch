@@ -5,7 +5,7 @@
 // an estimate. The two-building pair numbers elsewhere come from the full 8,760-hour simulation.
 
 import { nearestWalls, footprintRadius, hopTier, sizePipe } from "./pipe.js";
-import { gridVal, demandAt, costRange } from "./econ.js";
+import { gridVal, demandAt, costRange, pipeCost, srcKey, HP_USD_PER_KW } from "./econ.js";
 
 const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const CELL = 0.002; // ~170 m x 220 m spatial index cells
@@ -53,7 +53,7 @@ function neighbors(b, maxDist, index) {
 // Hour by hour, the source's heat is shared across every user on the loop. When demand
 // exceeds supply, each user gets the same fraction of its own demand.
 export function scoreChain(ids, hops, ctx, withGrids = false) {
-  const { grids, buildings, A, mode } = ctx;
+  const { grids, buildings, A, mode, track } = ctx;
   const gs = grids[ids[0]];
   const sinks = ids.slice(1);
   const alloc = new Float64Array(sinks.length);
@@ -63,7 +63,7 @@ export function scoreChain(ids, hops, ctx, withGrids = false) {
   for (let m = 0; m < 12; m++)
     for (let h = 0; h < 24; h++) {
       const i = m * 24 + h, days = DAYS[m];
-      const a = gridVal(gs, "src", i);
+      const a = gridVal(gs, srcKey(track), i);
       let D = 0;
       const ds = sinks.map((k) => demandAt(grids[k], mode, i));
       for (const d of ds) D += d;
@@ -94,12 +94,15 @@ export function scoreChain(ids, hops, ctx, withGrids = false) {
   const finedShare = tFuel > 0 ? tFined / tFuel : 0;
   const ll97 = Math.max(tco2e, 0) * finedShare * A.ll97_usd_per_t;
   const pipeM = hops.reduce((s, x) => s + x.dist, 0);
-  const pipeUsd = hops.reduce((s, x) => s + (x.dist * 3.28084 + A.connection_ft) * A.pipe_usd_per_ft[x.tier], 0);
-  const hpUsd = (peak / 3.412) * A.hp_usd_per_kw;
+  // every hop is priced like a pair's pipe (sized for the chain's peak; real street crossings where known)
+  const pipeItems = hops.flatMap((x, i) => pipeCost({ ...x, dist_m: x.dist }, peak / 3.412, A).items
+    .map((it) => ({ ...it, label: `Hop ${i + 1}: ${it.label}` })));
+  const pipeUsd = pipeItems.reduce((s, it) => s + it.v[1], 0);
+  const hpUsd = (peak / 3.412) * HP_USD_PER_KW[1];
   const energy = fuelUsd - elecUsd + waterUsd;
   const value = energy + ll97;
   const cost = costRange({
-    pipeUsd, peakKw: peak / 3.412, A, mode, storageHrs: 0, demandKbtuYr: demTot,
+    pipeItems, peakKw: peak / 3.412, A, mode, storageHrs: 0, demandKbtuYr: demTot,
     sinks: sinks.map((k, j) => {
       const b = buildings.get(k);
       return { fuel: b.fuel, units: b.units || 0, peakKw: (peak / 3.412) * (alloc[j] / Math.max(matched, 1)) };
@@ -123,13 +126,22 @@ export function scoreChain(ids, hops, ctx, withGrids = false) {
 
 // For every source that appears in the filtered pairs, grow the best chain of exactly `size`
 // buildings with a small beam search (keeps the BEAM best partial chains by tCO2e each step).
-export function findChains({ size, pairs, buildings, grids, A, filters, index }) {
-  const ctx = { grids, buildings, A, mode: filters.mode };
+export function findChains({ size, pairs, buildings, grids, A, filters, index, track }) {
+  const ctx = { grids, buildings, A, mode: filters.mode, track };
+  // source→user hops reuse the pair's real street-crossing data
+  const known = new Map(pairs.map((p) => [`${p.s}-${p.k}`, p]));
+  const link = (from, n) => {
+    const p = known.get(`${from}-${n.b.id}`);
+    return p
+      ? { from, to: n.b.id, dist: n.dist, tier: p.tier, xn: p.xn, xft: p.xft, xnames: p.xnames, prot: p.prot, sub: p.sub, hwy: p.hwy }
+      : { from, to: n.b.id, dist: n.dist, tier: n.tier };
+  };
   const sources = [...new Set(pairs.map((p) => p.s))];
   const out = [];
   for (const sId of sources) {
     const src = buildings.get(sId);
-    if (!grids[sId]?.src || !filters.kinds.includes(src.source)) continue;
+    const kind = track === "dc" ? "datacenter" : src.source;
+    if (!grids[sId]?.[srcKey(track)] || !filters.kinds.includes(kind)) continue;
     let beams = [{ ids: [sId], hops: [] }];
     for (let step = 1; step < size; step++) {
       const next = [];
@@ -140,14 +152,16 @@ export function findChains({ size, pairs, buildings, grids, A, filters, index })
         for (const n of neighbors(last, filters.maxDist, index)) {
           if (tried >= CANDIDATES) break;
           if (st.ids.includes(n.b.id) || n.b.id === sId || !grids[n.b.id]) continue;
-          if (!filters.tiers.includes(n.tier)) continue;
+          const hop = link(last.id, n);
+          if (!filters.tiers.includes(hop.tier)) continue;
           if (step === 1 && n.b.owner && src.owner && n.b.owner === src.owner) continue; // same owner: not a deal
+          if (src.source === "hospital" && n.b.sink === "hospital" && track !== "dc") continue; // one medical campus
           tried++;
           const ids = [...st.ids, n.b.id];
           const sig = [ids[0], ...ids.slice(1).sort()].join(",");
           if (seen.has(sig)) continue;
           seen.add(sig);
-          const hops = [...st.hops, { from: last.id, to: n.b.id, dist: n.dist, tier: n.tier }];
+          const hops = [...st.hops, hop];
           next.push({ ids, hops, m: scoreChain(ids, hops, ctx) });
         }
       }
@@ -157,7 +171,7 @@ export function findChains({ size, pairs, buildings, grids, A, filters, index })
     }
     const best = beams[0];
     if (best && best.ids.length === size && best.m.coincidence >= filters.minCoincidence && best.m.tco2e > 0)
-      out.push({ key: best.ids.join("-"), ids: best.ids, hops: best.hops, m: best.m, kind: src.source });
+      out.push({ key: best.ids.join("-"), ids: best.ids, hops: best.hops, m: best.m, kind, track });
   }
   return out;
 }

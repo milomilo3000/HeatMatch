@@ -1,25 +1,30 @@
 import React from "react";
-import { fmt, KIND_LABEL, FUEL_LABEL } from "./econ.js";
+import { fmt, KIND_LABEL, FUEL_LABEL, TAB_LABEL } from "./econ.js";
 
 const HEAT_USER_TYPES = [
   "Multifamily Housing", "Residence Hall/Dormitory", "Senior Living Community", "Residential Care Facility",
   "Other - Lodging/Residential", "Hotel", "Fitness Center/Health Club/Gym",
 ];
 
-function roleLabel(building, entry) {
+function roleLabel(building, entry, tab) {
+  if (tab === "dc" && building?.dc) {
+    return building.dc_measured ? "Data center · measured IT heat" : "Data center · estimated IT heat";
+  }
   if (building?.source && building?.sink) return "Can give and use heat";
   if (building?.source) return `Gives away heat · ${(KIND_LABEL[building.source] || "source").toLowerCase()}`;
   if (building?.sink) return `Needs heat · ${FUEL_LABEL[building.fuel] || "fuel"}`;
   if (entry.role?.includes("s") && entry.role?.includes("k")) return "Can give and use heat";
-  if (entry.role?.includes("s")) return "Gives away heat";
+  if (entry.role?.includes("d") || entry.role?.includes("s")) return tab === "dc" ? "Gives away heat" : "Gives away heat";
   if (entry.role?.includes("k")) return "Needs heat";
   return null;
 }
 
 export default function ResultsPanel({
   entry, building, partners, nearby, mode, setMode, selectedId, onSelect, onClose,
+  tab, otherTabCount, onSwitchTab, intentChips, onClearIntent, onOwnerData, sortLabel,
 }) {
-  const role = roleLabel(building, entry);
+  const role = roleLabel(building, entry, tab);
+  const otherTab = tab === "dc" ? "commercial" : "dc";
 
   return (
     <aside className="results">
@@ -34,6 +39,18 @@ export default function ResultsPanel({
             Shown as part of {entry.part_of}
           </div>
         )}
+        {building && onOwnerData && (
+          building._owner ? (
+            <div className="owner-row on">
+              <span className="conf m">Using your data</span>
+              <button type="button" onClick={onOwnerData}>Edit or reset</button>
+            </div>
+          ) : (
+            <div className="owner-row">
+              <button type="button" onClick={onOwnerData}>Own this building? Use your real energy numbers →</button>
+            </div>
+          )
+        )}
       </div>
 
       {entry.id < 0 && (
@@ -45,14 +62,29 @@ export default function ResultsPanel({
         </div>
       )}
 
+      {tab === "commercial" && entry.id >= 0 && (
+        <div className="est-banner">
+          <b>Estimates.</b> Cooling and refrigeration loads aren’t metered publicly — treat results as directional.
+        </div>
+      )}
+
       {entry.id >= 0 && (
         <>
+          {intentChips && (
+            <div className="intent-row">
+              <span className="muted">You asked for:</span>
+              {intentChips.map((c) => <span key={c} className="chip on">{c}</span>)}
+              <button type="button" onClick={onClearIntent} aria-label="Clear the assistant's filter">clear</button>
+            </div>
+          )}
+
           <div className="list-head">
             {partners.length ? `${partners.length} partner${partners.length > 1 ? "s" : ""}` : "No partners"}
+            {partners.length > 0 && sortLabel && <span>{sortLabel} first</span>}
           </div>
 
           <div className="partners">
-            {partners.map(({ p, e, other, match }, i) => {
+            {partners.map(({ p, e, other, match, youAreSource }, i) => {
               const tone = match.label === "Strong" ? "hi" : match.label === "Worth a look" ? "mid" : "lo";
               return (
                 <button
@@ -60,9 +92,12 @@ export default function ResultsPanel({
                   className={`partner ${p.id === selectedId ? "sel" : ""}`}
                   onClick={() => onSelect(p.id)}
                 >
-                  <span className={`num ${tone === "hi" ? "src" : tone === "mid" ? "src" : "snk"}`}>{i + 1}</span>
+                  <span className={`num ${youAreSource ? "snk" : "src"}`}>{i + 1}</span>
                   <span className="pbody">
-                    <span className="pname">{other.name}</span>
+                    <span className="pname">
+                      {other.name}
+                      {e.cost?.quoted && <span className="conf m">your quote</span>}
+                    </span>
                     <span className="pstats pstats-2 pstats-lg">
                       <span className="stat-primary"><em>Payback</em>{fmt.yrRange(e.paybackLow, e.paybackHigh)}</span>
                       <span className="stat-primary"><em>Est. cost</em>{fmt.usdRange(e.capexLow, e.capexHigh)}</span>
@@ -93,6 +128,12 @@ export default function ResultsPanel({
             )}
           </div>
 
+          {otherTabCount > 0 && (
+            <button type="button" className="switch-tab" onClick={onSwitchTab}>
+              {otherTabCount} more match{otherTabCount > 1 ? "es" : ""} in {TAB_LABEL[otherTab]} →
+            </button>
+          )}
+
           {partners.length > 0 && (
             <div className="foot">
               Screening estimates — not quotes.
@@ -101,8 +142,8 @@ export default function ResultsPanel({
                 <div className="ctl" style={{ marginTop: 8 }}>
                   <span>Heat serves</span>
                   <div className="seg">
-                    <button className={mode === "dhw" ? "on" : ""} onClick={() => setMode("dhw")}>Hot water</button>
-                    <button className={mode === "all" ? "on" : ""} onClick={() => setMode("all")}>+ Heating</button>
+                    <button type="button" className={mode === "dhw" ? "on" : ""} onClick={() => setMode("dhw")}>Hot water</button>
+                    <button type="button" className={mode === "all" ? "on" : ""} onClick={() => setMode("all")}>+ Heating</button>
                   </div>
                 </div>
               </details>

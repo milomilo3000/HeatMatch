@@ -4,7 +4,8 @@ import { pairEcon, fmt, KIND_LABEL } from "./econ.js";
 const TIERS = { 1: "Wall", 2: "Block", 3: "Street", 4: "Farther" };
 const ROUTE = { 1: "Wall", 2: "Block", 3: "Street", 4: "Farther" };
 
-export default function Sidebar({ data, filters, setFilters, pairs, totals, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
+export default function Sidebar({ data, filters, setFilters, pairs, totals, tab, selectedId, onSelect, chains, chainsBusy, chainKey, onSelectChain }) {
+  const srcLabel = (b) => (tab === "dc" ? (b.dc_measured ? "Data center · measured" : "Data center · est.") : KIND_LABEL[b.source]);
   const chainMode = filters.chainSize > 2;
   const A = data.summary.assumptions;
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
@@ -101,14 +102,18 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, sele
               </button>
             ))}
           </div>
-          <div className="row" style={{ marginTop: 8 }}><span>Source type</span></div>
-          <div className="chips">
-            {Object.entries(KIND_LABEL).map(([k, label]) => (
-              <button key={k} className={`chip ${filters.kinds.includes(k) ? "on" : ""}`} onClick={() => toggle("kinds", k)}>
-                {label}
-              </button>
-            ))}
-          </div>
+          {tab === "commercial" && (
+            <>
+              <div className="row" style={{ marginTop: 8 }}><span>Source type</span></div>
+              <div className="chips">
+                {Object.entries(KIND_LABEL).filter(([k]) => k !== "datacenter").map(([k, label]) => (
+                  <button key={k} type="button" className={`chip ${filters.kinds.includes(k) ? "on" : ""}`} onClick={() => toggle("kinds", k)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </section>
       </details>
 
@@ -161,6 +166,7 @@ export default function Sidebar({ data, filters, setFilters, pairs, totals, sele
                 </div>
                 <div className="meta">
                   <span className={`badge t${p.tier}`}>{ROUTE[p.tier]}</span>
+                  <span>{srcLabel(s)}</span>
                   <span>{e.payback ? `${e.payback.toFixed(0)} yr` : "—"}</span>
                   <span>{fmt.big(e.tco2e)} t CO₂/yr</span>
                 </div>

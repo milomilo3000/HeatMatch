@@ -1,4 +1,4 @@
-"""Proposal drafting endpoint. Run: .venv/bin/uvicorn api.proposal:app --port 8000
+"""Proposal drafting endpoint (mounted by api/main.py; run: .venv/bin/uvicorn api.main:app --port 8000).
 
 The browser posts a pair's facts (all computed from public data); Claude drafts one letter
 to each owner and streams it back as plain text. The web app falls back to a template
@@ -10,7 +10,10 @@ import json
 
 import anthropic
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+
+from . import ai
 
 MODEL = "claude-opus-5-5"
 MAX_FACTS_BYTES = 20_000
@@ -28,6 +31,9 @@ condenser-water loop, plant-room space).
 of their demand covered), the capital cost and payback, and the hour-by-hour fit.
 
 Rules:
+- If source.is_data_center is true, lead with that: a data center's IT load runs around the clock, so its waste
+  heat is steady day and night, all year, which is what makes it a reliable heat supply. Say whether the
+  heat figure comes from a measured IT load or an estimate (source.role tells you).
 - Use only numbers that appear in the facts. Round sensibly. Never invent figures, names or programs.
 - If the energy-only savings are negative, say plainly that the case rests on LL97 penalties.
 - Say once that these are screening estimates that need an engineering feasibility study.
@@ -42,7 +48,7 @@ client = anthropic.AsyncAnthropic()
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "model": MODEL}
+    return {"ok": True, "backend": ai.backend(), "api_model": MODEL}
 
 
 @app.post("/api/proposal")
@@ -55,6 +61,15 @@ async def proposal(request: Request):
     except json.JSONDecodeError:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
+    user = "Facts for this pair:\n" + json.dumps(facts, indent=1)
+    if ai.backend() == "cli":
+        # Claude Code on this machine's login (subscription): no streaming, the letters arrive in one piece
+        try:
+            text = await run_in_threadpool(ai.ask, SYSTEM, user, smart=True, timeout=120)
+        except ai.AIUnavailable as e:
+            return JSONResponse({"error": str(e)}, status_code=503)
+        return PlainTextResponse(text)
+
     manager = client.beta.messages.stream(
         model=MODEL,
         max_tokens=8000,
@@ -62,7 +77,7 @@ async def proposal(request: Request):
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
         system=SYSTEM,
-        messages=[{"role": "user", "content": "Facts for this pair:\n" + json.dumps(facts, indent=1)}],
+        messages=[{"role": "user", "content": user}],
     )
     # Open the stream before responding so auth/rate-limit errors become a proper HTTP status
     # (the browser then shows the template letter instead).

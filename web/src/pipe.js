@@ -85,10 +85,7 @@ export function sizePipe(deliveredKw, A) {
 export function pipeSpec(pair, A, opts) {
   const size = sizePipe((pair[`peak_${opts.mode}_${opts.storage}`] || 0) / 3.412, A);
   const lengthFt = pair.dist_m * 3.28084 + A.connection_ft;
-  return {
-    ...size, lengthM: pair.dist_m, lengthFt,
-    costUsd: lengthFt * A.pipe_usd_per_ft[pair.tier] * (opts.pipeMult ?? 1),
-  };
+  return { ...size, lengthM: pair.dist_m, lengthFt };
 }
 
 // Rough footprint radius in meters (centroid to farthest corner).
@@ -100,7 +97,8 @@ export function footprintRadius(b) {
   return r;
 }
 
-// Same distance tiers as the Python pipeline (pipeline/config.py).
+// Chain hops between two heat users aren't checked against the street map (the pipeline only
+// does that for source-user pairs), so their tier falls back to tax block + distance.
 export function hopTier(a, b, meters) {
   if (meters <= 3) return 1;
   if (a.bbl && b.bbl && a.bbl.slice(0, 6) === b.bbl.slice(0, 6)) return 2;
@@ -109,8 +107,26 @@ export function hopTier(a, b, meters) {
 }
 
 export const ROUTE = {
-  1: { how: "through the shared party wall", permit: "No easement or street work — the buildings touch." },
-  2: { how: "across the rear yards / lot line on the same block", permit: "Private easement between the two owners; no street opening." },
+  1: { how: "through the shared party wall", permit: "No easement or street work: the buildings touch." },
+  2: { how: "across the lot line on the same block", permit: "Private easement between the owners; no street opening." },
   3: { how: "under one street", permit: "NYC DOT revocable consent + street-opening permit; utility mark-out under the roadway." },
-  4: { how: "under several lots or streets", permit: "Multiple easements and/or DOT consents — the hardest kind of run." },
+  4: { how: "under several streets", permit: "A DOT revocable consent and street-opening permit for each street: the hardest kind of run." },
 };
+
+const tidy = (name) => String(name).replace(/\s+/g, " ").trim();
+
+// Short phrase for what the pipe route crosses, using real street names when the pipeline found them.
+export function crossingText(link) {
+  if (link.tier === 1) return "shares a wall";
+  if (link.xn == null) return ["", "", "same block", "across one street", "across several streets"][link.tier];
+  if (!link.xn) return "no street to cross";
+  const names = (link.xnames || []).map(tidy);
+  if (link.xn === 1) return `crosses ${names[0] || "one street"}`;
+  return `crosses ${link.xn} streets${names.length ? ` (${names.slice(0, 2).join(", ")})` : ""}`;
+}
+
+export function routeHow(link) {
+  const names = (link.xnames || []).map(tidy);
+  if (link.xn && names.length) return `under ${names.slice(0, 2).join(" and ")}`;
+  return ROUTE[link.tier].how;
+}

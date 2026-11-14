@@ -89,22 +89,37 @@ def buildings(ll84: pd.DataFrame, monthly: pd.DataFrame, towers: pd.DataFrame) -
         for bins, bbls in zip(b["bins"], b["bbls"])
     ]
 
-    # embedded data centers (e.g. an office tower with a data-center floor)
-    dc_ft2 = b["list_of_all_property_use"].fillna("").map(lambda s: sum(float(x) for x in DC_USE.findall(s)))
+    # --- data-center track: every property with a data center, standalone or a floor inside a tower
+    pt = b["primary_property_type"].fillna("")
+    dc_ft2 = np.maximum(
+        b["list_of_all_property_use"].fillna("").map(lambda s: sum(float(x) for x in DC_USE.findall(s))),
+        num(b["data_center_gross_floor_area"]).fillna(0),
+    )
+    is_dc_type = pt == "Data Center"
     a = (dc_ft2 / b["gfa"].replace(0, np.nan)).clip(0, 1).fillna(0)
     k = C.DATACENTER_INTENSITY
-    b["dc_elec_share"] = (k * a / (k * a + (1 - a))).fillna(0)
+    share = (k * a / (k * a + (1 - a))).fillna(0)
+    b["dc_elec_share"] = np.where(is_dc_type, np.maximum(share, 0.8), share)
+    b["dc_ft2"] = dc_ft2
+    # Measured: LL84's data-center IT site energy (kBtu). Essentially all IT power becomes heat, and the
+    # chiller adds its own work on top. Estimated: the data center's share of building electricity.
+    it = num(b["data_center_it_site_energy"]).where(lambda x: x > 0)
+    b["dc_measured"] = it.notna()
+    est = b["elec"] * b["dc_elec_share"] * C.DATACENTER_HEAT_SHARE
+    b["dc_heat_kbtu"] = np.where(b["dc_measured"], it * C.DC_IT_HEAT_FACTOR, est)
+    has_dc = is_dc_type | (dc_ft2 >= C.DC_MIN_FT2) | b["dc_measured"]
+    b["dc_source"] = has_dc & (b["dc_heat_kbtu"] >= C.DC_MIN_HEAT_KBTU)
 
-    # roles
-    pt = b["primary_property_type"].fillna("")
+    # --- commercial track: refrigeration, hospitals/labs, and buildings with a registered cooling tower.
+    # Anything that qualifies as a data center belongs to the data-center track only, so the two tabs
+    # never show the same building as a heat source.
     src = pt.map(C.SOURCE_24_7)
     rink_ok = (pt != "Other - Recreation") | b["property_name"].fillna("").str.contains(RINK)
     src = src.where(rink_ok)
     src = src.fillna(pt.map(C.SOURCE_IF_TOWER).where(b["towers"] > 0))
-    src = src.where(~(b["dc_elec_share"] >= 0.3), "datacenter")  # mostly-IT buildings run like data centers
-    b["source_kind"] = src.where(b["elec"] > 0)
+    b["source_kind"] = src.where((b["elec"] > 0) & ~is_dc_type & ~b["dc_source"])
     b["sink_kind"] = pt.map(C.SINK_TYPES).where(b["heat_fuel"] >= C.SINK_MIN_HEAT_KBTU)
-    b = b[b["source_kind"].notna() | b["sink_kind"].notna()].copy()
+    b = b[b["dc_source"] | b["source_kind"].notna() | b["sink_kind"].notna()].copy()
     b = dedupe_bins(b)
 
     # monthly gas, kept only when it reconciles with the annual gas total

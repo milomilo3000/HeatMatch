@@ -1,16 +1,19 @@
 import React, { useMemo, useState } from "react";
 import HeatGrid from "./HeatGrid.jsx";
 import PipeCard from "./PipeCard.jsx";
-import { pairEcon, gridVal, demandAt, fmt, KIND_LABEL, FUEL_LABEL, MONTHS } from "./econ.js";
-
-const TIER_NOTE = {
-  1: "Buildings touch — pipe through the party wall",
-  2: "Same block — private easement only",
-  3: "Across one street — needs a NYC DOT permit",
-  4: "Longer run — multiple lots or streets",
-};
+import { pairEcon, gridVal, demandAt, srcKey, sourceLabel, fmt, FUEL_LABEL, MONTHS } from "./econ.js";
+import { ROUTE, crossingText } from "./pipe.js";
 
 const TIER_SCORE = { 1: 1, 2: 0.85, 3: 0.6, 4: 0.3 };
+
+const TIER_REASON = {
+  1: "Shared wall — easiest pipe run",
+  2: "Same block — short private run",
+  3: "Across a street — needs a city permit",
+  4: "Farther apart — longer, costlier pipe",
+};
+
+const routeNote = (pair) => `${crossingText(pair).replace(/^./, (c) => c.toUpperCase())}. ${ROUTE[pair.tier].permit}`;
 
 function monthly(g, fn) {
   const out = [];
@@ -21,13 +24,6 @@ function monthly(g, fn) {
   }
   return out;
 }
-
-const TIER_REASON = {
-  1: "Shared wall — easiest pipe run",
-  2: "Same block — short private run",
-  3: "Across a street — needs a city permit",
-  4: "Farther apart — longer, costlier pipe",
-};
 
 /** 0–100 screening score for planners: timing + coverage + connection ease + payback. */
 export function heatMatchScore(pair, e, mode) {
@@ -54,11 +50,13 @@ export function buildFacts(data, grids, pair, filters, e) {
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
   const gs = grids?.[pair.s], gk = grids?.[pair.k];
   return {
-    source: { name: s.name, address: s.address, borough: s.borough, type: s.type, role: KIND_LABEL[s.source],
+    source: { name: s.name, address: s.address, borough: s.borough, type: s.type, role: sourceLabel(s, pair.track),
+      is_data_center: pair.track === "dc",
       owner: s.owner, cooling_towers: s.towers, data_center_share_of_electricity: s.dc_share },
     sink: { name: k.name, address: k.address, borough: k.borough, type: k.type, owner: k.owner,
       residential_units: k.units, heats_with: FUEL_LABEL[k.fuel] || k.fuel },
-    link: { distance_m: pair.dist_m, tier: TIER_NOTE[pair.tier], serves: filters.mode === "dhw" ? "domestic hot water" : "hot water and space heat",
+    link: { distance_m: pair.dist_m, tier: routeNote(pair), streets_crossed: pair.xnames || [], crosses_protected_street: !!pair.prot,
+      subway_under_street: !!pair.sub, serves: filters.mode === "dhw" ? "domestic hot water" : "hot water and space heat",
       storage_hours: filters.storage, hour_overlap: pair[`coincidence_${filters.mode}`], share_of_sink_demand_covered: pair[`coverage_${filters.mode}`] },
     annual: { heat_reused_mmbtu: Math.round(e.mmbtu), tco2e_avoided: Math.round(e.tco2e), fuel_savings_usd: Math.round(e.fuelUsd),
       heat_pump_electricity_usd: Math.round(e.elecUsd), cooling_tower_water_savings_usd: Math.round(e.waterUsd),
@@ -68,7 +66,7 @@ export function buildFacts(data, grids, pair, filters, e) {
       sink_is_nycha_article_321: e.nycha },
     monthly_mmbtu: gs && gk ? {
       months: MONTHS,
-      source_heat_available: monthly(gs, (g, i) => gridVal(g, "src", i)),
+      source_heat_available: monthly(gs, (g, i) => gridVal(g, srcKey(pair.track), i)),
       sink_heat_demand: monthly(gk, (g, i) => demandAt(g, filters.mode, i)),
     } : null,
   };
@@ -104,6 +102,7 @@ Estimated installed cost is $${(a.installed_cost_range_usd[0] / 1e6).toFixed(1)}
 
 export default function PairDrawer({
   data, grids, pair, filters, setFilters, hour, month, onClose, onBack, focusEntry, embedded,
+  quote, setQuote,
 }) {
   const A = data.summary.assumptions;
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
@@ -114,7 +113,9 @@ export default function PairDrawer({
   const [note, setNote] = useState("");
 
   // LL97 penalty savings always included in screening numbers
-  const e = pairEcon(pair, k, A, { mode: filters.mode, storage: filters.storage, elecPrice, pipeMult, includeLL97: true });
+  const opts = { mode: filters.mode, storage: filters.storage, elecPrice, pipeMult, includeLL97: true };
+  const e = pairEcon(pair, k, A, { ...opts, quote });
+  const before = pair._owner && data.raw ? pairEcon(pair._orig, data.raw.buildings.get(pair.k), A, opts) : null;
   const match = heatMatchScore(pair, e, filters.mode);
   const coverage = pair[`coverage_${filters.mode}`] || 0;
   const gs = grids?.[pair.s], gk = grids?.[pair.k];
@@ -125,11 +126,11 @@ export default function PairDrawer({
     if (!gs || !gk) return null;
     const src = [], dem = [], matchVals = [];
     for (let i = 0; i < 288; i++) {
-      const a = gridVal(gs, "src", i), d = demandAt(gk, filters.mode, i);
+      const a = gridVal(gs, srcKey(pair.track), i), d = demandAt(gk, filters.mode, i);
       src.push(a); dem.push(d); matchVals.push(Math.min(a, d));
     }
     return { src, dem, match: matchVals, srcMax: Math.max(...src), demMax: Math.max(...dem) };
-  }, [gs, gk, filters.mode]);
+  }, [gs, gk, filters.mode, pair.track]);
 
   async function draft() {
     setBusy(true); setLetter(""); setNote("");
@@ -164,9 +165,9 @@ export default function PairDrawer({
   }
 
   const modeLbl = filters.mode === "dhw" ? "hot water" : "hot water + space heat";
-  // True energy net (fuel + water − heat-pump power). Can be negative when elec costs more than fuel saved.
   const energyNet = e.energy;
   const tone = match.label === "Strong" ? "hi" : match.label === "Worth a look" ? "mid" : "lo";
+  const sourceRole = sourceLabel(s, pair.track);
 
   return (
     <div className={`drawer compact-drawer ${embedded ? "drawer-embedded" : ""}`}>
@@ -185,7 +186,7 @@ export default function PairDrawer({
           <div className="who-sm">{focusEntry.name}</div>
           <div className="muted" style={{ fontSize: 12 }}>
             {youGive
-              ? (KIND_LABEL[s.source] || focusEntry.type || "Gives heat")
+              ? sourceRole
               : (focusEntry.type || FUEL_LABEL[k.fuel] || "Needs heat")}
           </div>
           <div className="pair-arrow">→</div>
@@ -194,7 +195,7 @@ export default function PairDrawer({
           <div className="muted" style={{ fontSize: 12 }}>
             {youGive
               ? (partner.type || FUEL_LABEL[partner.fuel] || "Needs heat")
-              : (KIND_LABEL[partner.source] || partner.type || "Gives heat")}
+              : sourceLabel(partner, pair.track)}
           </div>
         </div>
       )}
@@ -226,6 +227,12 @@ export default function PairDrawer({
             <div className="l">{energyNet >= 0 ? "net energy save / yr" : "net energy cost / yr"}</div>
           </div>
         </div>
+        {before && (
+          <div className="before-after">
+            <span className="conf m">Using your data</span> Public-data model said {fmt.usdRange(before.capexLow, before.capexHigh)},
+            {" "}{fmt.yrRange(before.paybackLow, before.paybackHigh)} payback, {fmt.usd(before.value)}/yr.
+          </div>
+        )}
       </div>
 
       <div className="block">
@@ -287,11 +294,21 @@ export default function PairDrawer({
           <h4>Cost line items</h4>
           {e.cost.items.map((it) => (
             <div key={it.label} className="econ-row">
-              <span>{it.label}</span>
+              <span>{it.label}{it.note && <em className="note"> {it.note}</em>}</span>
               <span>{fmt.usd(it.v[1])}</span>
             </div>
           ))}
-          <div className="econ-row total"><span>Total (base)</span><span>{fmt.usd(e.capex)}</span></div>
+          <div className="econ-row total"><span>{e.cost.quoted ? "Your quote" : "Total (base)"}</span><span>{fmt.usd(e.capex)}</span></div>
+          {setQuote && (
+            <label className="quote">
+              Have a contractor quote? It replaces the estimate (saved in this browser only).
+              <span>
+                $ <input type="number" min="0" step="10000" value={quote ?? ""} placeholder="e.g. 1800000"
+                  onChange={(ev) => setQuote(ev.target.value === "" ? null : +ev.target.value)} />
+                {quote > 0 && <button type="button" onClick={() => setQuote(null)}>remove</button>}
+              </span>
+            </label>
+          )}
           <div className="row" style={{ marginTop: 12 }}><span>Electricity price</span><b>${elecPrice.toFixed(2)}/kWh</b></div>
           <input type="range" min={0.1} max={0.3} step={0.01} value={elecPrice} onChange={(ev) => setElecPrice(+ev.target.value)} />
           <div className="row"><span>Pipe cost</span><b>{pipeMult.toFixed(1)}×</b></div>
@@ -299,7 +316,7 @@ export default function PairDrawer({
           <div className="row"><span>Storage</span></div>
           <div className="seg">
             {A.storage_hours.map((h) => (
-              <button key={h} className={filters.storage === h ? "on" : ""} onClick={() => setFilters((f) => ({ ...f, storage: h }))}>
+              <button key={h} type="button" className={filters.storage === h ? "on" : ""} onClick={() => setFilters((f) => ({ ...f, storage: h }))}>
                 {h === 0 ? "None" : `${h} h`}
               </button>
             ))}

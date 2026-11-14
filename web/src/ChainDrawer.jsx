@@ -1,10 +1,9 @@
 import React, { useMemo } from "react";
 import HeatGrid from "./HeatGrid.jsx";
 import { scoreChain } from "./chain.js";
-import { ROUTE, LOOP } from "./pipe.js";
+import { ROUTE, LOOP, crossingText } from "./pipe.js";
 import { fmt, KIND_LABEL, FUEL_LABEL } from "./econ.js";
 
-const TIER_SHORT = { 1: "Shared wall", 2: "Same block", 3: "Across one street", 4: "Further" };
 
 export default function ChainDrawer({ data, grids, chain, filters, hour, month, onClose }) {
   const A = data.summary.assumptions;
@@ -12,7 +11,7 @@ export default function ChainDrawer({ data, grids, chain, filters, hour, month, 
   const src = get(chain.ids[0]);
   // recompute with grids for the charts (same numbers as the list, plus 12x24 series)
   const m = useMemo(
-    () => scoreChain(chain.ids, chain.hops, { grids, buildings: data.buildings, A, mode: filters.mode }, true),
+    () => scoreChain(chain.ids, chain.hops, { grids, buildings: data.buildings, A, mode: filters.mode, track: chain.track }, true),
     [chain, grids, data, A, filters.mode],
   );
   const vmax = Math.max(...m.grids.src, ...m.grids.dem);
@@ -37,9 +36,9 @@ export default function ChainDrawer({ data, grids, chain, filters, hour, month, 
 
       <div className="block">
         <div className="kpis">
-          <div className="kpi"><div className="v" style={{ color: "var(--heat)" }}>{fmt.int(m.mmbtu)}</div><div className="l">MMBtu/yr reused</div></div>
-          <div className="kpi"><div className="v" style={{ color: "var(--good)" }}>{fmt.int(m.tco2e)}</div><div className="l">tCO₂e/yr avoided</div></div>
-          <div className="kpi"><div className="v">{fmt.yrRange(m.paybackLow, m.paybackHigh)}</div><div className="l">simple payback</div></div>
+          <div className="kpi"><div className="v" style={{ color: "var(--heat)" }}>{fmt.int(m.mmbtu)}</div><div className="l">est. MMBtu/yr reused</div></div>
+          <div className="kpi"><div className="v" style={{ color: "var(--good)" }}>{fmt.int(m.tco2e)}</div><div className="l">est. tCO₂e/yr avoided</div></div>
+          <div className="kpi"><div className="v">{fmt.yrRange(m.paybackLow, m.paybackHigh)}</div><div className="l">est. simple payback</div></div>
         </div>
       </div>
 
@@ -50,7 +49,7 @@ export default function ChainDrawer({ data, grids, chain, filters, hour, month, 
             <span className="dot">S</span>
             <div>
               <b>{src.name}</b>
-              <div className="note">{KIND_LABEL[src.source]} · {fmt.int(m.srcMmbtu)} MMBtu/yr of usable waste heat · {src.owner || "owner n/a"}</div>
+              <div className="note">{KIND_LABEL[chain.kind]} · {fmt.int(m.srcMmbtu)} MMBtu/yr of usable waste heat · {src.owner || "owner n/a"}</div>
             </div>
           </li>
           {chain.hops.map((h, i) => {
@@ -60,7 +59,7 @@ export default function ChainDrawer({ data, grids, chain, filters, hour, month, 
               <React.Fragment key={h.to}>
                 <li className="hop">
                   <span className={`badge t${h.tier}`}>{Math.round(h.dist)} m</span>
-                  <span className="note">{TIER_SHORT[h.tier]}: {ROUTE[h.tier].permit}</span>
+                  <span className="note">{crossingText(h)}. {ROUTE[h.tier].permit}</span>
                 </li>
                 <li className="stop">
                   <span className="dot">{i + 1}</span>
