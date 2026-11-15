@@ -1,6 +1,7 @@
 const PUBLIC_HOSTS = ["heatmatch.us", "www.heatmatch.us"];
 const remote = typeof window !== "undefined" && PUBLIC_HOSTS.includes(window.location.hostname);
 const API_ORIGIN = "https://heatmatch-i54j.onrender.com";
+export const hosted = remote || (typeof window !== "undefined" && window.location.origin === API_ORIGIN);
 const SESSION_KEY = "heatmatch-demo-token";
 let session;
 

@@ -1,5 +1,6 @@
-"""Synthesize assistant replies using the server's ElevenLabs account."""
+"""Synthesize replies and authorize live transcription with ElevenLabs."""
 import json
+import logging
 import os
 from contextlib import closing
 from http.client import HTTPException, HTTPSConnection
@@ -18,6 +19,31 @@ DEFAULT_VOICE = "JBFqnCBsd6RMkjVDRZzb"
 
 class SpeechRequest(BaseModel):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+
+
+@router.post("/api/scribe-token", dependencies=[Depends(require_demo_login)])
+def scribe_token():
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        return JSONResponse({"error": "Live transcription is unavailable. ElevenLabs is not configured."}, status_code=503)
+
+    error = {"error": "ElevenLabs could not start live transcription."}
+    headers = {"xi-api-key": key, "Accept": "application/json"}
+    try:
+        with closing(HTTPSConnection("api.elevenlabs.io", timeout=10)) as client:
+            client.request("POST", "/v1/single-use-token/realtime_scribe", headers=headers)
+            with client.getresponse() as response:
+                if response.status != 200:
+                    logging.getLogger(__name__).warning("ElevenLabs rejected a Scribe token request: HTTP %s", response.status)
+                    return JSONResponse(error, status_code=502)
+                payload = json.loads(response.read())
+    except (OSError, HTTPException, ValueError):
+        return JSONResponse(error, status_code=502)
+
+    token = payload.get("token") if isinstance(payload, dict) else None
+    if not isinstance(token, str) or not token:
+        return JSONResponse(error, status_code=502)
+    return JSONResponse({"token": token}, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/speech", dependencies=[Depends(require_demo_login)])

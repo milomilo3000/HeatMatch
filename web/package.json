@@ -19,6 +19,7 @@
     "@deck.gl/layers": "^9.1.14",
     "@deck.gl/mapbox": "^9.1.14",
     "@deck.gl/mesh-layers": "^9.1.14",
+    "@elevenlabs/client": "^1.36.1",
     "maplibre-gl": "^4.7.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

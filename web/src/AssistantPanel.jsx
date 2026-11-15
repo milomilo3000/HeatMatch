@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch } from "./api.js";
+import { apiFetch, hosted } from "./api.js";
 
 const CAN_RECORD = typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!window.MediaRecorder;
 const MAX_RECORDING_MS = 15_000;
 const TRANSCRIPTION_TIMEOUT_MS = 30_000;
+const LIVE_TRANSCRIPTION_TIMEOUT_MS = 10_000;
 const EXAMPLES = [
   "I run the data center at 111 Eighth Avenue. Find hotels within a block.",
   "Which data centers could heat Fulton Houses?",
@@ -12,6 +13,9 @@ const EXAMPLES = [
 
 function releaseMicrophone(session) {
   clearTimeout(session.timer);
+  const connection = session.connection;
+  session.connection = null;
+  connection?.close();
   if (session.recorder) {
     session.recorder.ondataavailable = null;
     session.recorder.onstop = null;
@@ -42,6 +46,7 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
   useEffect(() => () => {
     const session = recording.current;
     if (session) {
+      recording.current = null;
       session.controller.abort();
       releaseMicrophone(session);
     }
@@ -114,8 +119,8 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
   }
 
   async function toggleMic() {
-    if (recording.current?.recorder?.state === "recording") {
-      recording.current.recorder.stop();
+    if (recording.current?.stop) {
+      recording.current.stop();
       return;
     }
     if (recording.current || busy) return;
@@ -129,12 +134,75 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
     const { signal } = session.controller;
     const chunks = [];
     function resetMic() {
-      releaseMicrophone(session);
       if (recording.current === session) recording.current = null;
+      releaseMicrophone(session);
       if (!signal.aborted) setMicState("idle");
     }
 
     try {
+      if (hosted) {
+        const timeout = AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS);
+        const [response, sdk] = await Promise.all([
+          apiFetch("/api/scribe-token", { method: "POST", signal: AbortSignal.any([signal, timeout]) }),
+          import("@elevenlabs/client").catch(() => null),
+        ]);
+        if (signal.aborted) return;
+        if (response.status === 401 || response.status === 403) {
+          setMicError("Use Demo login to unlock microphone transcription on this site.");
+          resetMic();
+          return;
+        }
+        if (response.ok && sdk) {
+          const { token } = await response.json();
+          const { Scribe, RealtimeEvents, CommitStrategy } = sdk;
+          if (signal.aborted) return;
+          const connection = Scribe.connect({
+            token,
+            modelId: "scribe_v2_realtime",
+            languageCode: "en",
+            commitStrategy: CommitStrategy.MANUAL,
+            microphone: { echoCancellation: true, noiseSuppression: true },
+          });
+          session.connection = connection;
+
+          function finish(error, transcript = "") {
+            if (signal.aborted || session.connection !== connection) return;
+            if (transcript.trim()) setText(transcript.trim());
+            else setMicError(error || "I didn't hear any speech. Check your input volume and try again.");
+            resetMic();
+          }
+
+          function stop() {
+            session.stop = null;
+            clearTimeout(session.timer);
+            setMicState("transcribing");
+            session.timer = setTimeout(() => finish("Live transcription timed out. Try again or type your question."),
+              LIVE_TRANSCRIPTION_TIMEOUT_MS);
+            try {
+              connection.mute();
+              connection.commit();
+            } catch {
+              finish("Couldn't finish live transcription. Try again or type your question.");
+            }
+          }
+
+          session.timer = setTimeout(() => finish("Live transcription couldn't start. Check microphone access and try again."),
+            TRANSCRIPTION_TIMEOUT_MS);
+          connection.on(RealtimeEvents.AUDIO_STARTED, () => {
+            if (signal.aborted || session.connection !== connection) return;
+            clearTimeout(session.timer);
+            session.stop = stop;
+            session.timer = setTimeout(stop, MAX_RECORDING_MS);
+            setMicState("streaming");
+          });
+          connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, ({ text: transcript }) => finish(null, transcript));
+          connection.on(RealtimeEvents.ERROR, () => finish("Live transcription stopped. Check microphone access or type your question."));
+          connection.on(RealtimeEvents.CLOSE, () => finish("Live transcription disconnected. Try again or type your question."));
+          return;
+        }
+        // Use the existing recorder when the live service cannot start.
+      }
+
       session.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (signal.aborted) {
         resetMic();
@@ -148,6 +216,7 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
         resetMic();
       };
       recorder.onstop = async () => {
+        session.stop = null;
         releaseMicrophone(session);
         setMicState("transcribing");
         const timeout = AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS);
@@ -175,23 +244,26 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
         }
       };
       recorder.start();
-      setMicState("recording");
-      session.timer = setTimeout(() => {
+      session.stop = () => {
+        session.stop = null;
         if (recorder.state === "recording") recorder.stop();
-      }, MAX_RECORDING_MS);
+      };
+      setMicState("recording");
+      session.timer = setTimeout(session.stop, MAX_RECORDING_MS);
     } catch (error) {
       if (!signal.aborted) {
         const message = error.name === "NotAllowedError" ? "Allow microphone access for this page and try again."
           : error.name === "NotFoundError" ? "No microphone was found. Connect one or type your question."
-          : "Couldn't open the microphone. Check that your input device is available.";
+          : "Couldn't start transcription. Try again or type your question.";
         setMicError(message);
       }
       resetMic();
     }
   }
 
-  const listening = micState === "recording";
-  const micStatus = { opening: "Waiting for microphone permission…", recording: "Recording. Click the microphone again to stop.",
+  const listening = micState === "recording" || micState === "streaming";
+  const micStatus = { opening: "Starting microphone…", recording: "Recording. Click the microphone again to stop.",
+    streaming: "Streaming audio to ElevenLabs. Click the microphone again to stop.",
     transcribing: "Turning your recording into text…" }[micState];
 
   return (
@@ -226,7 +298,7 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
       {(micError || micStatus) && (
         <div className="as-note as-speech-error">
           <span role="status">{micError || micStatus}</span>
-          {micState === "transcribing" && <button type="button" className="mic-cancel" onClick={cancelRecording}>Cancel</button>}
+          {(micState === "opening" || micState === "transcribing") && <button type="button" className="mic-cancel" onClick={cancelRecording}>Cancel</button>}
         </div>
       )}
       {speechError && <div className="as-note as-speech-error" role="status">{speechError}</div>}

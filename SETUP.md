@@ -58,7 +58,7 @@ python -m uvicorn api.main:app --host 0.0.0.0 --port "$PORT" --forwarded-allow-i
 
 Set **Health Check Path** to `/api/health` and select **Manual Deploy → Clear build cache & deploy** after changing the build command. [Render deployment settings](https://render.com/docs/deploys)
 
-The Render build uses the compact Vosk English microphone model for faster transcription on the free instance. The service's `/api/health` route reports the model it loaded. If a recording takes over 30 seconds to transcribe, type the question or try a shorter recording.
+On `heatmatch.us`, the browser streams microphone audio directly to ElevenLabs Scribe Realtime. After demo sign-in, the API issues a single-use token and keeps the ElevenLabs key on Render. If the API cannot issue a token, the hosted microphone uses the existing Vosk recorder. The service's `/api/health` route reports the fallback model.
 
 Create a Render Web Service from this repo using the root `Dockerfile`, or connect `render.yaml` as a Blueprint. The service hosts the website and API on the same HTTPS origin. In the service's **Environment** settings set `HEATMATCH_DEMO_PASSWORD`, `ANTHROPIC_API_KEY`, and `ELEVENLABS_API_KEY`. Add `ANTHROPIC_WORKSPACE_ID` or `ELEVENLABS_VOICE_ID` if your keys require them.
 
@@ -66,7 +66,7 @@ The existing `heatmatch.us` static service calls the API at `heatmatch-i54j.onre
 
 ## 3. Enable ElevenLabs voice replies
 
-1. Sign in to ElevenLabs. Open **Developers → API Keys**, create a restricted key, and enable **Text to Speech**. You can set a credit limit when creating the key. [ElevenLabs API key instructions](https://elevenlabs.io/docs/help-center/technical/how-do-i-authorize-myself-using-an-api-key)
+1. Sign in to ElevenLabs. Open **Developers → API Keys**, create a restricted key, and enable **Text to Speech** for voice replies and **Speech to Text** for hosted microphone input. You can set a credit limit when creating the key. [ElevenLabs API key instructions](https://elevenlabs.io/docs/help-center/technical/how-do-i-authorize-myself-using-an-api-key)
 2. Edit `.env` in the HeatMatch folder and set `ELEVENLABS_API_KEY` to the new key. Leave `ELEVENLABS_VOICE_ID` empty to use the built-in voice. For another voice, copy its voice ID from **My Voices** and set it there. Keep both provider keys in `.env`, which Git ignores.
 3. Restart the API. Open **Ask** in HeatMatch and click **Read answers aloud** (the speaker button). Then type “Which data centers could heat Fulton Houses?” The reply appears in chat. Use the audio player if the browser blocks autoplay.
 

@@ -10,6 +10,7 @@ from api.main import app
     ("/api/proposal", {"annual": {}}),
     ("/api/extract-usage", {"text": "Example bill."}),
     ("/api/speech", {"text": "A heat match."}),
+    ("/api/scribe-token", None),
 ])
 def test_provider_routes_require_login(monkeypatch, path, payload):
     monkeypatch.setenv("HEATMATCH_DEMO_PASSWORD", "test-demo-password")

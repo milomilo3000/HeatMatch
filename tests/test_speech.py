@@ -58,3 +58,34 @@ def test_speech_validates_text_and_handles_missing_key(monkeypatch, signed_in):
     assert signed_in.post("/api/speech", json={"text": "A reply."}).status_code == 503
     assert signed_in.post("/api/speech", json={"text": " "}).status_code == 422
     assert signed_in.post("/api/speech", json={"text": "a" * 1001}).status_code == 422
+
+
+@pytest.mark.parametrize("provider_status, expected_status", [(200, 200), (403, 502)])
+def test_scribe_token_returns_only_a_temporary_token(monkeypatch, signed_in, provider_status, expected_status):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "voice-test-key")
+
+    class TokenResponse(BytesIO):
+        status = provider_status
+
+    class MockConnection:
+        def __init__(self, host, timeout):
+            assert host == "api.elevenlabs.io"
+
+        def request(self, method, target, headers):
+            assert (method, target) == ("POST", "/v1/single-use-token/realtime_scribe")
+            assert headers["xi-api-key"] == "voice-test-key"
+
+        def getresponse(self):
+            return TokenResponse(b'{"token":"temporary-token","other":"voice-test-key"}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(speech, "HTTPSConnection", MockConnection)
+    response = signed_in.post("/api/scribe-token")
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert response.json() == {"token": "temporary-token"}
+        assert response.headers["cache-control"] == "no-store"
+    else:
+        assert response.json() == {"error": "ElevenLabs could not start live transcription."}
