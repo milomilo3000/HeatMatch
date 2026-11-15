@@ -1,4 +1,5 @@
-"""Turn short microphone recordings into text on this device."""
+"""Turn short microphone recordings into text on the HeatMatch server."""
+import asyncio
 import os
 from functools import lru_cache
 from io import BytesIO
@@ -12,7 +13,8 @@ from fastapi.responses import JSONResponse
 from .demo_login import require_demo_login
 
 router = APIRouter()
-MODEL = Path(__file__).resolve().parents[1] / ".models" / "base.en"
+MODELS = Path(__file__).resolve().parents[1] / ".models"
+transcription_slot = asyncio.Semaphore(1)
 AUDIO_TYPES = {"audio/webm", "audio/ogg", "audio/mp4", "audio/wav", "video/webm", "video/mp4"}
 MAX_BYTES = 2 * 1024 * 1024
 SAMPLE_RATE = 16000
@@ -24,14 +26,19 @@ class TranscriptionUnavailable(RuntimeError):
 
 @lru_cache(maxsize=1)
 def load_model():
-    if not (MODEL / "model.bin").is_file():
-        raise TranscriptionUnavailable("Local speech recognition needs a model. See the HeatMatch setup guide.")
+    hosted = os.environ.get("RENDER") == "true"
+    base = MODELS / "base.en"
+    tiny = MODELS / "tiny.en"
+    prefer_tiny = hosted or not (base / "model.bin").is_file()
+    model = tiny if prefer_tiny and (tiny / "model.bin").is_file() else base
+    if not (model / "model.bin").is_file():
+        raise TranscriptionUnavailable("Speech recognition needs a model. See the HeatMatch setup guide.")
     try:
         from faster_whisper import WhisperModel
 
-        return WhisperModel(str(MODEL), device="cpu", compute_type="int8", cpu_threads=4)
+        return WhisperModel(str(model), device="cpu", compute_type="int8", cpu_threads=1 if hosted else 4)
     except (ImportError, OSError, RuntimeError, ValueError) as error:
-        raise TranscriptionUnavailable("Local speech recognition could not start. See the HeatMatch setup guide.") from error
+        raise TranscriptionUnavailable("Speech recognition could not start. See the HeatMatch setup guide.") from error
 
 
 def transcribe_audio(recording):
@@ -57,7 +64,8 @@ def transcribe_audio(recording):
         raise ValueError("The recording could not be read. Try recording again.") from error
     if not samples:
         return ""
-    segments, _ = model.transcribe(np.concatenate(samples), language="en", beam_size=1, vad_filter=True)
+    segments, _ = model.transcribe(np.concatenate(samples), language="en", beam_size=1, vad_filter=True,
+                                   max_new_tokens=80, condition_on_previous_text=False)
     return " ".join(segment.text.strip() for segment in segments).strip()
 
 
@@ -78,8 +86,11 @@ async def transcribe(request: Request):
         return JSONResponse({"error": "No microphone audio was captured."}, status_code=400)
     recording.seek(0)
 
+    if transcription_slot.locked():
+        return JSONResponse({"error": "Speech recognition is busy. Try again or type your question."}, status_code=503)
     try:
-        text = await run_in_threadpool(transcribe_audio, recording)
+        async with transcription_slot:
+            text = await run_in_threadpool(transcribe_audio, recording)
     except TranscriptionUnavailable as error:
         return JSONResponse({"error": str(error)}, status_code=503)
     except ValueError as error:

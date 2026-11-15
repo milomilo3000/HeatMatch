@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 RUN HF_HUB_DISABLE_IMPLICIT_TOKEN=1 HF_HUB_DISABLE_XET=1 HF_HUB_DISABLE_PROGRESS_BARS=1 \
-    python -c "from faster_whisper.utils import download_model; download_model('base.en', output_dir='.models/base.en')"
+    python -c "from faster_whisper.utils import download_model; download_model('tiny.en', output_dir='.models/tiny.en')"
 COPY api/ api/
 COPY --from=frontend /app/web/dist web/dist
 USER 10001:10001

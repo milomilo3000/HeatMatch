@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 const CAN_RECORD = typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!window.MediaRecorder;
 const MAX_RECORDING_MS = 15_000;
+const TRANSCRIPTION_TIMEOUT_MS = 30_000;
 const EXAMPLES = [
   "I run the data center at 111 Eighth Avenue. Find hotels within a block.",
   "Which data centers could heat Fulton Houses?",
@@ -93,9 +94,20 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
     };
   }, [log, muted]);
 
+  function cancelRecording() {
+    const session = recording.current;
+    if (!session) return;
+    session.controller.abort();
+    releaseMicrophone(session);
+    recording.current = null;
+    setMicState("idle");
+  }
+
   function send(t) {
     const q = (t ?? text).trim();
-    if (!q || busy || micState !== "idle") return;
+    if (!q || busy) return;
+    cancelRecording();
+    setMicError("");
     setText("");
     onAsk(q);
   }
@@ -137,12 +149,16 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
       recorder.onstop = async () => {
         releaseMicrophone(session);
         setMicState("transcribing");
+        const timeout = AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS);
         try {
           const clip = new Blob(chunks, { type: recorder.mimeType || chunks[0]?.type });
           if (!clip.size) throw new Error("No microphone audio was captured. Try recording again.");
-          const response = await fetch("/api/transcribe", { method: "POST", body: clip, signal });
+          const response = await fetch("/api/transcribe", {
+            method: "POST", body: clip, signal: AbortSignal.any([signal, timeout]),
+          });
           const result = await response.json().catch(() => null);
           if (signal.aborted) return;
+          timeout.throwIfAborted();
           if (!response.ok || typeof result?.text !== "string") {
             throw new Error(response.status === 401 ? "Use Demo login to unlock microphone transcription on this site."
               : result?.error || "Can't reach speech recognition. Check that HeatMatch is running.");
@@ -150,7 +166,9 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
           if (result.text.trim()) setText(result.text);
           else setMicError("I didn't hear any speech. Check your input volume and try again.");
         } catch (error) {
-          if (!signal.aborted) setMicError(error.message);
+          if (!signal.aborted) setMicError(timeout.aborted
+            ? "Speech recognition timed out. Try a shorter recording or type your question."
+            : error.message);
         } finally {
           resetMic();
         }
@@ -204,7 +222,12 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
         <div ref={end} />
       </div>
 
-      {(micError || micStatus) && <div className="as-note as-speech-error" role="status">{micError || micStatus}</div>}
+      {(micError || micStatus) && (
+        <div className="as-note as-speech-error">
+          <span role="status">{micError || micStatus}</span>
+          {micState === "transcribing" && <button type="button" className="mic-cancel" onClick={cancelRecording}>Cancel</button>}
+        </div>
+      )}
       {speechError && <div className="as-note as-speech-error" role="status">{speechError}</div>}
       {speechUrl && <audio className="as-audio" ref={attachAudio} src={speechUrl} controls autoPlay aria-label="Play the latest HeatMatch reply" />}
       <form className="as-input" onSubmit={(e) => { e.preventDefault(); send(); }}>
@@ -215,7 +238,7 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
           </button>
         )}
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder={CAN_RECORD ? "Record or type a request" : "Type a request"} />
-        <button type="submit" className="send" disabled={busy || micState !== "idle" || !text.trim()}>Ask</button>
+        <button type="submit" className="send" disabled={busy || !text.trim()}>Ask</button>
       </form>
     </div>
   );

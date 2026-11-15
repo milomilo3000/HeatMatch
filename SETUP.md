@@ -50,13 +50,15 @@ For an existing **Python Web Service**, leave **Root Directory** blank and set i
 
 ```bash
 # Build Command
-python -m pip install -r requirements.txt && npm --prefix web ci && npm --prefix web run build && python -c "from faster_whisper.utils import download_model; download_model('base.en', output_dir='.models/base.en')"
+bash render-build.sh
 
 # Start Command
 python -m uvicorn api.main:app --host 0.0.0.0 --port "$PORT" --forwarded-allow-ips '*'
 ```
 
 Set **Health Check Path** to `/api/health` and select **Manual Deploy → Clear build cache & deploy** after changing the build command. [Render deployment settings](https://render.com/docs/deploys)
+
+The Render build uses the smaller English `tiny.en` microphone model so it requires less memory and CPU. If a recording takes over 30 seconds to transcribe, type the question or try a shorter recording.
 
 Create a Render Web Service from this repo using the root `Dockerfile`, or connect `render.yaml` as a Blueprint. The service hosts the website and API on the same HTTPS origin. In the service's **Environment** settings set `HEATMATCH_DEMO_PASSWORD`, `ANTHROPIC_API_KEY`, and `ELEVENLABS_API_KEY`. Add `ANTHROPIC_WORKSPACE_ID` or `ELEVENLABS_VOICE_ID` if your keys require them.
 

@@ -310,6 +310,7 @@ details.more[open] > summary::before { content: "▾ "; }
 .as-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .as-audio { width: calc(100% - 24px); height: 36px; margin: 6px 12px 10px; flex-shrink: 0; }
 .as-speech-error { padding: 0 14px 6px; }
+.mic-cancel { margin-left: 8px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: transparent; font-size: inherit; }
 .as-input { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
 .as-input input { flex: 1; min-width: 0; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line); border-radius: 10px; color: var(--text); font: inherit; padding: 9px 11px; outline: none; }
 .as-input input:focus { border-color: rgba(255, 122, 26, 0.6); }
