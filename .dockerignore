@@ -1,0 +1,15 @@
+*
+!Dockerfile
+!requirements.txt
+!api/
+!api/*.py
+!web/
+!web/index.html
+!web/package.json
+!web/package-lock.json
+!web/vite.config.js
+!web/src/
+!web/src/**
+!web/public/
+!web/public/data/
+!web/public/data/*.json

@@ -20,6 +20,7 @@ input[type="range"] { width: 100%; accent-color: var(--heat); }
 
 .app { position: relative; height: 100%; }
 .map-wrap { position: absolute; inset: 0; }
+.map-wrap .loading { z-index: auto; }
 
 /* --- header: wordmark · search · toggle */
 .top { position: absolute; top: 14px; left: 16px; right: 16px; display: grid; grid-template-columns: auto minmax(280px, 560px) auto; justify-content: space-between; align-items: start; gap: 16px; z-index: 10; pointer-events: none; }
@@ -30,6 +31,16 @@ input[type="range"] { width: 100%; accent-color: var(--heat); }
 .search-wrap { position: relative; }
 .search { position: relative; display: flex; align-items: center; background: rgba(14, 18, 28, 0.96); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 14px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); }
 .search:focus-within { border-color: rgba(255, 122, 26, 0.6); }
+.demo-trigger { flex: none; margin-right: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font-size: 12px; white-space: nowrap; }
+.demo-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 13; width: min(300px, 100%); display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-solid); box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55); }
+.demo-panel-heading { display: flex; align-items: center; justify-content: space-between; }
+.demo-panel label { display: grid; gap: 6px; }
+.search .demo-panel input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; }
+.search .demo-panel input:focus { border-color: var(--heat); }
+.demo-panel p { margin: 0; color: var(--muted); }
+.demo-panel .demo-error { color: var(--bad); }
+.demo-submit { justify-self: start; border: 0; border-radius: 8px; background: var(--heat); color: #141414; font-weight: 600; padding: 8px 12px; }
+.demo-submit:disabled { opacity: 0.5; }
 .search-icon { width: 18px; height: 18px; margin-left: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
 .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font: inherit; font-size: 15px; padding: 15px 12px; }
 .search input::placeholder { color: var(--muted); }
@@ -50,6 +61,9 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 .mode-switch button { border: 0; background: transparent; color: var(--muted); font-weight: 600; font-size: 12.5px; padding: 9px 14px; border-radius: 9px; white-space: nowrap; }
 .mode-switch button.on { background: rgba(255, 122, 26, 0.18); color: var(--text); }
 .mode-switch button:hover:not(.on) { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+.top-controls { display: grid; justify-items: end; gap: 6px; }
+.scenario-toggle { padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-solid); color: var(--muted); font-size: 11px; white-space: nowrap; }
+.scenario-toggle[aria-pressed="true"] { color: var(--text); border-color: var(--heat); }
 
 .empty-tip { position: absolute; left: 16px; top: 84px; width: min(300px, calc(100vw - 32px)); z-index: 6; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; backdrop-filter: blur(8px); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); }
 .empty-tip.compact p { margin: 0 0 12px; color: var(--text); line-height: 1.4; font-size: 13.5px; }
@@ -294,6 +308,8 @@ details.more[open] > summary::before { content: "▾ "; }
 .as-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .as-chips span { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid rgba(255, 122, 26, 0.45); color: var(--muted); }
 .as-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.as-audio { width: calc(100% - 24px); height: 36px; margin: 6px 12px 10px; flex-shrink: 0; }
+.as-speech-error { padding: 0 14px 6px; }
 .as-input { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
 .as-input input { flex: 1; min-width: 0; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line); border-radius: 10px; color: var(--text); font: inherit; padding: 9px 11px; outline: none; }
 .as-input input:focus { border-color: rgba(255, 122, 26, 0.6); }

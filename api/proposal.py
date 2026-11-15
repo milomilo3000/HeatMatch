@@ -7,15 +7,15 @@ letter if this endpoint is unreachable, so the demo never blocks on it.
 from __future__ import annotations
 
 import json
+from contextlib import AsyncExitStack
 
 import anthropic
-from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import ai
+from .demo_login import require_demo_login
 
-MODEL = "claude-opus-5-5"
 MAX_FACTS_BYTES = 20_000
 
 SYSTEM = """You draft short, concrete outreach letters for HeatMatch NYC, a screening tool that pairs \
@@ -24,34 +24,34 @@ New York City buildings that reject waste heat with neighbors that burn fuel for
 You get a JSON object of facts about one pair, computed from public data (NYC LL84 benchmarking, the \
 cooling-tower registry, PLUTO, NREL load profiles). Write two letters:
 
-1. To the owner of the heat SOURCE: what they gain (lower cooling-tower water and chemical costs, a \
-possible heat-sale revenue stream, a local climate story), and what it asks of them (access to \
-condenser-water loop, plant-room space).
-2. To the owner of the heat SINK: what they gain (fuel savings, LL97 penalty exposure avoided, share \
-of their demand covered), the capital cost and payback, and the hour-by-hour fit.
+1. To the owner of the heat SOURCE: lead with their estimated annual cooling-tower savings. Follow with \
+the potential to sell heat and what it asks of them (access to the condenser-water loop and plant-room space).
+2. To the owner of the heat SINK: lead with their estimated annual reduction in costs. Distinguish fuel \
+savings after heat-pump electricity from avoided LL97 penalty exposure. Give the estimated installed cost \
+and share of demand covered as supporting details.
 
 Rules:
-- If source.is_data_center is true, lead with that: a data center's IT load runs around the clock, so its waste
-  heat is steady day and night, all year, which is what makes it a reliable heat supply. Say whether the
-  heat figure comes from a measured IT load or an estimate (source.role tells you).
+- Omit payback, break-even timelines, and any estimate of how long it takes to recover the installed cost.
+- If the facts include a scenario, identify the numbers in both letters as illustrative demo estimates and give the stated efficiency and capture assumptions.
+- If source.is_data_center is true, explain that steady IT waste heat makes it a reliable heat supply.
+  Say whether the heat figure comes from a measured IT load or an estimate (source.role tells you).
 - Use only numbers that appear in the facts. Round sensibly. Never invent figures, names or programs.
-- If the energy-only savings are negative, say plainly that the case rests on LL97 penalties.
+- If energy costs increase, say so. When avoided LL97 penalties offset that increase, explain the distinction.
 - Say once that these are screening estimates that need an engineering feasibility study.
 - Mention the distance and what crossing it involves (party wall, easement, or DOT street permit).
 - Each letter: a "TO:" line, a "RE:" line, then 120-180 words, then a single proposed next step.
 - Plain text, no markdown headings or bold. Separate the two letters with a line containing only "---".
 - Sign each letter "HeatMatch NYC"."""
 
-app = FastAPI(title="HeatMatch proposal API")
-client = anthropic.AsyncAnthropic()
+app = FastAPI(title="HeatMatch API")
 
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "backend": ai.backend(), "api_model": MODEL}
+    return {"ok": True, "backend": ai.backend(), "api_model": ai.model()}
 
 
-@app.post("/api/proposal")
+@app.post("/api/proposal", dependencies=[Depends(require_demo_login)])
 async def proposal(request: Request):
     body = await request.body()
     if len(body) > MAX_FACTS_BYTES:
@@ -60,42 +60,39 @@ async def proposal(request: Request):
         facts = json.loads(body)
     except json.JSONDecodeError:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    if not isinstance(facts, dict):
+        return JSONResponse({"error": "expected a JSON object of pair facts"}, status_code=400)
+    annual = facts.get("annual")
+    if isinstance(annual, dict):
+        annual.pop("payback_range_years", None)
 
     user = "Facts for this pair:\n" + json.dumps(facts, indent=1)
-    if ai.backend() == "cli":
-        # Claude Code on this machine's login (subscription): no streaming, the letters arrive in one piece
-        try:
-            text = await run_in_threadpool(ai.ask, SYSTEM, user, smart=True, timeout=120)
-        except ai.AIUnavailable as e:
-            return JSONResponse({"error": str(e)}, status_code=503)
-        return PlainTextResponse(text)
-
-    manager = client.beta.messages.stream(
-        model=MODEL,
-        max_tokens=8000,
-        output_config={"effort": "low"},  # short letters; keep latency low for a live demo
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=SYSTEM,
-        messages=[{"role": "user", "content": user}],
-    )
     # Open the stream before responding so auth/rate-limit errors become a proper HTTP status
     # (the browser then shows the template letter instead).
     try:
-        stream = await manager.__aenter__()
+        async with AsyncExitStack() as opening:
+            client = await opening.enter_async_context(anthropic.AsyncAnthropic(**ai.client_options(120)))
+            stream = await opening.enter_async_context(client.messages.stream(
+                model=ai.model(),
+                max_tokens=8000,
+                output_config={"effort": "low"},
+                system=SYSTEM,
+                messages=[{"role": "user", "content": user}],
+            ))
+            stack = opening.pop_all()
+    except ai.AIUnavailable as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
     except anthropic.AuthenticationError:
-        return JSONResponse({"error": "no Anthropic credentials configured"}, status_code=503)
+        return JSONResponse({"error": "the Anthropic API key was rejected"}, status_code=503)
     except anthropic.RateLimitError:
         return JSONResponse({"error": "rate limited"}, status_code=429)
     except anthropic.APIStatusError as e:
         return JSONResponse({"error": f"Claude API error {e.status_code}"}, status_code=502)
     except anthropic.APIConnectionError:
         return JSONResponse({"error": "cannot reach Claude API"}, status_code=502)
-    except TypeError:  # the SDK raises this when no credential source is configured at all
-        return JSONResponse({"error": "no Anthropic credentials configured"}, status_code=503)
 
     async def gen():
-        try:
+        async with stack:
             async for text in stream.text_stream:
                 yield text
             final = await stream.get_final_message()
@@ -103,7 +100,5 @@ async def proposal(request: Request):
                 yield "\n\n[The model declined to draft this letter.]"
             elif final.stop_reason == "max_tokens":
                 yield "\n\n[Draft truncated.]"
-        finally:
-            await manager.__aexit__(None, None, None)
 
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")

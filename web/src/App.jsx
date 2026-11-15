@@ -1,17 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import MapView, { INITIAL } from "./MapView.jsx";
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { INITIAL } from "./mapCamera.js";
 import Sidebar from "./Sidebar.jsx";
 import PairDrawer, { heatMatchScore } from "./PairDrawer.jsx";
 import ChainDrawer from "./ChainDrawer.jsx";
 import SearchBar from "./SearchBar.jsx";
+import DemoLogin from "./DemoLogin.jsx";
 import ResultsPanel from "./ResultsPanel.jsx";
 import OwnerDataPanel from "./OwnerDataPanel.jsx";
 import AssistantPanel from "./AssistantPanel.jsx";
 import { buildIndex, findChains } from "./chain.js";
 import { loadIndex, nearbyOpposite, searchIndex } from "./search.js";
 import { applyOwner, loadOwner, saveOwner } from "./owner.js";
-import { getIntent, matchesTypes, sortRows, describeFilter, sayCost, sayPayback, TYPE_LABEL, SORT_LABEL } from "./intent.js";
-import { filterPairs, portfolio, computeFlowMax, pairEcon, fmt } from "./econ.js";
+import { getIntent, matchesTypes, sortRows, describeFilter, sayCost, sayPayback, saySavings, TYPE_LABEL, SORT_LABEL } from "./intent.js";
+import { demoAssumptions, filterPairs, portfolio, pairEcon, fmt } from "./econ.js";
+
+const MapView = lazy(() => import("./MapView.jsx"));
 
 const COMMERCIAL_KINDS = ["refrigeration", "hospital", "office"];
 const DEFAULT_FILTERS = {
@@ -42,13 +45,18 @@ export default function App() {
   const [error, setError] = useState(null);
   const [owner, setOwner] = useState(loadOwner);
   const [ownerOpen, setOwnerOpen] = useState(false);
-  const { data, grids } = useMemo(() => applyOwner(rawData, rawGrids, owner), [rawData, rawGrids, owner]);
+  const [demo, setDemo] = useState(() => new URLSearchParams(window.location.search).get("demo") === "1");
+  const { data, grids } = useMemo(() => {
+    if (!rawData || !demo) return applyOwner(rawData, rawGrids, owner);
+    const summary = { ...rawData.summary, demo: true, assumptions: demoAssumptions(rawData.summary.assumptions) };
+    return applyOwner({ ...rawData, summary }, rawGrids, owner);
+  }, [rawData, rawGrids, owner, demo]);
 
   const [askOpen, setAskOpen] = useState(false);
   const [askBusy, setAskBusy] = useState(false);
   const [askLog, setAskLog] = useState([]);
   const [intent, setIntent] = useState(null);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(true);
   const pendingReply = useRef(null);
 
   const [tab, setTab] = useState("dc");
@@ -128,13 +136,16 @@ export default function App() {
   }, [data, focus, otherTab, searchMaxDist]);
 
   useEffect(() => {
+    let current = true;
     setNearby([]);
     if (!focus || focus.id < 0 || partnerRows.length) return;
-    loadIndex().then((ix) => setNearby(nearbyOpposite(ix, focus, tab)));
+    loadIndex().then((ix) => {
+      if (current) setNearby(nearbyOpposite(ix, focus, tab));
+    }).catch(() => {});
+    return () => { current = false; };
   }, [focus, partnerRows.length, tab]);
 
   const arcPairs = searchMode ? allPairs : filtered;
-  const flowMax = useMemo(() => computeFlowMax(arcPairs, grids, filters.mode), [arcPairs, grids, filters.mode]);
   const selected = data && selectedId != null ? data.pairById.get(selectedId) : null;
 
   const index = useMemo(() => (data ? buildIndex(data.buildings) : null), [data]);
@@ -178,33 +189,35 @@ export default function App() {
   async function ask(text) {
     setAskLog((l) => [...l, { who: "you", text }]);
     setAskBusy(true);
-    const { intent: it, offline } = await getIntent({ text, tab, focusName: focus?.name, previous: intent });
-    setAskBusy(false);
-    if (it.clarify) return say(it.clarify, { offline });
+    try {
+      const { intent: it, offline, includePayback } = await getIntent({ text, tab, focusName: focus?.name, previous: intent });
+      if (it.clarify) return say(it.clarify, { offline });
 
-    let entry = focus;
-    if (it.anchor_text) {
-      const hits = searchIndex(await loadIndex(), it.anchor_text, 6);
-      const wantTab = it.tab || (it.my_role === "data_center" ? "dc" : null);
-      entry = hits.find((h) => (wantTab === "dc" ? h.has_dc : wantTab === "commercial" ? h.has_com : h.has_dc || h.has_com)) || hits[0] || null;
-      if (!entry) return say(`I couldn't find a benchmarked building matching “${it.anchor_text}”. Try the street address.`, { offline });
+      let entry = focus;
+      if (it.anchor_text) {
+        const hits = searchIndex(await loadIndex(), it.anchor_text, 6);
+        const wantTab = it.tab || (it.my_role === "data_center" ? "dc" : null);
+        entry = hits.find((h) => (wantTab === "dc" ? h.has_dc : wantTab === "commercial" ? h.has_com : h.has_dc || h.has_com)) || hits[0] || null;
+        if (!entry) return say(`I couldn't find a benchmarked building matching “${it.anchor_text}”. Try the street address.`, { offline });
+      }
+      if (!entry) return say("Which building is yours? Tell me its name or street address.", { offline });
+
+      const nextTab = it.tab || (entry.has_dc ? "dc" : entry.has_com ? "commercial" : tab);
+      if (nextTab !== tab) setTab(nextTab);
+      if (it.heat_use) setFilters((f) => ({ ...f, mode: it.heat_use }));
+      setIntent(it);
+      pendingReply.current = { offline, chips: describeFilter(it), includePayback };
+      if (!focus || entry.id !== focus.id) pickEntry(entry, true);
+      else { setView("search"); setSelectedId(null); }
+    } catch {
+      say("Building search is temporarily unavailable. Try asking again.");
+    } finally {
+      setAskBusy(false);
     }
-    if (!entry) return say("Which building is yours? Tell me its name or street address.", { offline });
-
-    const nextTab = it.tab || (entry.has_dc ? "dc" : entry.has_com ? "commercial" : tab);
-    if (nextTab !== tab) setTab(nextTab);
-    if (it.heat_use) setFilters((f) => ({ ...f, mode: it.heat_use }));
-    setIntent(it);
-    pendingReply.current = { offline, chips: describeFilter(it) };
-    if (!focus || entry.id !== focus.id) pickEntry(entry, true);
-    else { setView("search"); setSelectedId(null); }
   }
 
   function say(text, extra = {}) {
     setAskLog((l) => [...l, { who: "bot", text, ...extra }]);
-    if (muted || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
   }
 
   useEffect(() => {
@@ -217,16 +230,23 @@ export default function App() {
     if (!partnerRows.length)
       return say(`I didn't find any ${kindsTxt} ${where}${intent.no_street_crossing ? " without crossing a street" : ""}. Try a wider distance or other building types.`, pending);
     const best = partnerRows[0];
+    const ranking = intent.sort === "savings" ? "" : ` ranks first for ${SORT_LABEL[intent.sort]} and`;
+    const cost = intent.sort === "cheapest" ? ` It would cost an estimated ${sayCost(best.e.capexLow, best.e.capexHigh)} to build.` : "";
+    const payback = pending.includePayback ? ` ${sayPayback(best.e.paybackLow, best.e.paybackHigh)}` : "";
+    const scenario = data.summary.demo ? "Under the demo assumptions, " : "";
     say(`I found ${partnerRows.length} ${partnerRows.length === 1 ? kindsTxt.replace(/s\b/g, "") : kindsTxt} ${where}. `
-      + `The ${SORT_LABEL[intent.sort] === "best payback" ? "best payback" : SORT_LABEL[intent.sort]} is ${best.other.name}, ${Math.round(best.p.dist_m)} meters away: `
-      + `an estimated ${sayCost(best.e.capexLow, best.e.capexHigh)} to build, ${sayPayback(best.e.paybackLow, best.e.paybackHigh)}.`, pending);
+      + `${scenario}${best.other.name}${ranking} ${saySavings(best.e.value)}.${cost}${payback}`, pending);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerRows, intent, focus]);
 
-  useEffect(() => {
+  function flyToFocus() {
     if (!focus || !data) return;
     const pts = [focus, ...partnerRows.slice(0, 8).map((r) => r.other)];
     flyToPoints(pts, partnerRows.length ? {} : { zoom: 16.4 });
+  }
+
+  useEffect(() => {
+    flyToFocus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
 
@@ -234,7 +254,10 @@ export default function App() {
     setChainKey(null);
     setSelectedId(id);
     const p = data?.pairById.get(id);
-    if (!p) return;
+    if (p) flyToPair(p);
+  }
+
+  function flyToPair(p) {
     const s = data.buildings.get(p.s), k = data.buildings.get(p.k);
     const bearing = (Math.atan2(k.lon - s.lon, k.lat - s.lat) * 180) / Math.PI + 70;
     flyToPoints([s, k], { zoom: p.dist_m > 80 ? 16.1 : 16.6, pitch: 58, bearing });
@@ -245,6 +268,12 @@ export default function App() {
     setSelectedId(null);
     setChainKey(key);
     if (c) flyToPoints(c.ids.map((id) => data.buildings.get(id)));
+  }
+
+  function onMapReady() {
+    if (selected) flyToPair(selected);
+    else if (selectedChain) flyToPoints(selectedChain.ids.map((id) => data.buildings.get(id)));
+    else if (searchMode) flyToFocus();
   }
 
   function clearFocus() {
@@ -266,6 +295,14 @@ export default function App() {
     setChainKey(null);
     if (next === "all") mapRef.current?.flyTo({ center: [INITIAL.longitude, INITIAL.latitude], zoom: INITIAL.zoom, pitch: INITIAL.pitch, bearing: INITIAL.bearing, duration: 1800 });
     else if (focus) flyToPoints([focus, ...partnerRows.slice(0, 8).map((r) => r.other)]);
+  }
+
+  function toggleDemo() {
+    const url = new URL(window.location.href);
+    if (demo) url.searchParams.delete("demo");
+    else url.searchParams.set("demo", "1");
+    window.history.replaceState(null, "", url);
+    setDemo(!demo);
   }
 
   useEffect(() => {
@@ -293,27 +330,25 @@ export default function App() {
   return (
     <div className={`app ${searchMode ? "is-search" : "is-all"} tab-${tab}`}>
       <div className="map-wrap">
-        <MapView
-          mapRef={mapRef}
-          data={data}
-          grids={grids}
-          pairs={arcPairs}
-          mode={view}
-          tab={tab}
-          focus={searchMode ? focus : null}
-          partners={searchMode ? partnerPairs : null}
-          selected={selected}
-          chain={searchMode ? null : selectedChain}
-          onSelect={selectPair}
-          onPickBuilding={(id) => pickEntry(entryFromBuilding(data.buildings.get(id)))}
-          hoverId={hoverId}
-          onHoverBuilding={setHoverId}
-          hour={hour}
-          month={month}
-          heatMode={filters.mode}
-          storage={filters.storage}
-          flowMax={flowMax}
-        />
+        <Suspense fallback={<div className="loading" role="status">Loading map…</div>}>
+          <MapView
+            mapRef={mapRef}
+            data={data}
+            pairs={arcPairs}
+            mode={view}
+            tab={tab}
+            focus={searchMode ? focus : null}
+            partners={searchMode ? partnerPairs : null}
+            selected={selected}
+            chain={searchMode ? null : selectedChain}
+            onReady={onMapReady}
+            onSelect={selectPair}
+            onPickBuilding={(id) => pickEntry(entryFromBuilding(data.buildings.get(id)))}
+            hoverId={hoverId}
+            onHoverBuilding={setHoverId}
+            heatMode={filters.mode}
+          />
+        </Suspense>
       </div>
 
       <header className="top">
@@ -327,20 +362,27 @@ export default function App() {
           </div>
         </div>
         <div className="search-wrap">
-          <SearchBar value={focus} onPick={(e) => pickEntry(e)} onClear={clearFocus} onAsk={() => setAskOpen((o) => !o)} asking={askOpen} />
+          <SearchBar value={focus} onPick={(e) => pickEntry(e)} onClear={clearFocus} onAsk={() => setAskOpen((o) => !o)}
+            asking={askOpen} demoLogin={<DemoLogin />} />
           {askOpen && (
             <AssistantPanel log={askLog} busy={askBusy} onAsk={ask} muted={muted} setMuted={setMuted}
-              onClose={() => { setAskOpen(false); window.speechSynthesis?.cancel(); }} />
+              onClose={() => setAskOpen(false)} />
           )}
           {searchMode && !focus && !askOpen && <div className="search-hint">{hint}</div>}
           {!searchMode && !askOpen && <div className="search-hint">Citywide screening for planners</div>}
         </div>
-        <div className="mode-switch" role="group" aria-label="View mode">
-          <button type="button" className={searchMode ? "on" : ""} onClick={() => switchView("search")} title="Find partners for one building">
-            My building
-          </button>
-          <button type="button" className={!searchMode ? "on" : ""} onClick={() => switchView("all")} title="Browse every match citywide">
-            Citywide
+        <div className="top-controls">
+          <div className="mode-switch" role="group" aria-label="View mode">
+            <button type="button" className={searchMode ? "on" : ""} onClick={() => switchView("search")} title="Find partners for one building">
+              My building
+            </button>
+            <button type="button" className={!searchMode ? "on" : ""} onClick={() => switchView("all")} title="Browse every match citywide">
+              Citywide
+            </button>
+          </div>
+          <button type="button" className="scenario-toggle" aria-pressed={demo} onClick={toggleDemo}
+            title="Compare the baseline with a heat pump that uses less electricity for the same heat delivery">
+            {demo ? `Demo estimate · COP ${A.hp_cop} · ${(100 * A.capture_eff).toFixed(1)}% capture` : "Demo estimates"}
           </button>
         </div>
       </header>
@@ -379,7 +421,7 @@ export default function App() {
 
       {searchMode && focus && selected && (
         <PairDrawer
-          key={selected.id}
+          key={`${selected.id}:${demo}`}
           data={data}
           grids={grids}
           pair={selected}
@@ -426,7 +468,7 @@ export default function App() {
 
       {!searchMode && selected && (
         <PairDrawer
-          key={selected.id}
+          key={`${selected.id}:${demo}`}
           data={data}
           grids={grids}
           pair={selected}

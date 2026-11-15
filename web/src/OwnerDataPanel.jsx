@@ -61,6 +61,7 @@ export default function OwnerDataPanel({ building, grid, A, record, defaultKind,
       const r = await fetch(`/api/extract-usage?filename=${encodeURIComponent(file.name)}&kind=${kind === "dc" ? "data_center" : "heat_user"}`,
         { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
       const out = await r.json().catch(() => ({}));
+      if (r.status === 401) throw new Error("use Demo login to unlock AI file reading");
       if (!r.ok) throw new Error(out.error || `error ${r.status}`);
       fill(out, file.name);
     } catch (err) {

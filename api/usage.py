@@ -12,11 +12,12 @@ import io
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from . import ai
+from .demo_login import require_demo_login
 
 router = APIRouter()
 MAX_BYTES = 15 * 1024 * 1024
@@ -83,7 +84,7 @@ def _clean(out: dict) -> dict:
     return out
 
 
-@router.post("/api/extract-usage")
+@router.post("/api/extract-usage", dependencies=[Depends(require_demo_login)])
 async def extract_usage(request: Request, filename: str = "upload", kind: str = "unknown"):
     data = await request.body()
     if not data:
@@ -111,13 +112,13 @@ async def extract_usage(request: Request, filename: str = "upload", kind: str = 
 
         if text is not None:
             user = f"{hint}File name: {filename}\n\n<document>\n{text}\n</document>"
-            out = await run_in_threadpool(ai.ask, SYSTEM, user, schema=SCHEMA, smart=True, timeout=120)
+            out = await run_in_threadpool(ai.ask, SYSTEM, user, schema=SCHEMA, timeout=120)
         else:
             tmp = tempfile.TemporaryDirectory(prefix="heatmatch-upload-")
             path = Path(tmp.name) / f"document{ext}"
             path.write_bytes(data)
-            user = f"{hint}Read the file {path.name} in the current folder (original name: {filename}) and extract the usage."
-            out = await run_in_threadpool(ai.ask, SYSTEM, user, schema=SCHEMA, read_file=path, smart=True, timeout=180)
+            user = f"{hint}Extract usage from the attached document (original name: {filename})."
+            out = await run_in_threadpool(ai.ask, SYSTEM, user, schema=SCHEMA, read_file=path, timeout=180)
     except ai.AIUnavailable as e:
         return JSONResponse({"error": f"AI reading is unavailable ({e})"}, status_code=503)
     except Exception as e:  # unreadable spreadsheet, etc.

@@ -106,6 +106,13 @@ export function costRange({ pipeItems, peakKw, sinks, demandKbtuYr, storageHrs, 
   return { items, low: total[0], base: total[1], high: total[2] };
 }
 
+export function demoAssumptions(baseline) {
+  const hp_cop = 5;
+  // Keep the precomputed delivered-heat profiles feasible at the higher COP.
+  const capture_eff = baseline.capture_eff * (1 - 1 / hp_cop) / (1 - 1 / baseline.hp_cop);
+  return { ...baseline, hp_cop, capture_eff };
+}
+
 export function pairEcon(pair, sink, A, opts) {
   const { mode = "all", storage = 0, elecPrice = A.elec_usd_per_kwh, pipeMult = 1, includeLL97 = true } = opts;
   const m = pair[`matched_${mode}_${storage}`] || 0; // kBtu/yr useful heat delivered
@@ -185,23 +192,6 @@ export function demandAt(g, mode, idx) {
 
 // Data-center pairs read the source's IT-heat grid ("dc"); commercial pairs its cooling grid ("src").
 export const srcKey = (track) => (track === "dc" ? "dc" : "src");
-
-// Heat that can move between a pair in one (month, hour) cell, kBtu/h.
-export function flowAt(p, grids, mode, idx) {
-  return Math.min(gridVal(grids[p.s], srcKey(p.track), idx), demandAt(grids[p.k], mode, idx));
-}
-
-// Each pair's peak hourly flow, so "flowing now" is relative to what that pair can do.
-export function computeFlowMax(pairs, grids, mode) {
-  const m = new Map();
-  if (!grids) return m;
-  for (const p of pairs) {
-    let mx = 0;
-    for (let i = 0; i < 288; i++) mx = Math.max(mx, flowAt(p, grids, mode, i));
-    m.set(p.id, mx || 1);
-  }
-  return m;
-}
 
 export function demandMax(g, mode) {
   if (!g) return 1;

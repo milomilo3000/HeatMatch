@@ -17,22 +17,12 @@ HackPrinceton, sustainability track. Screening tool, not an engineering design.
 
 ## Quick start
 
-```bash
-python3.15 -m venv .venv && .venv/bin/pip install pandas numpy shapely pyproj requests pyarrow openpyxl fastapi uvicorn anthropic pytest
-.venv/bin/python symbiocity.py            # ~5 min first run (downloads + caches), ~3 min after
-.venv/bin/python -m pytest -q tests
+Follow the [setup guide](SETUP.md) to run the demo and configure Anthropic and ElevenLabs.
+The included demo data is ready to use.
 
-cd web && npm install && npm run dev      # http://localhost:5173
-
-# AI features (voice assistant, reading uploaded bills, proposal letters)
-.venv/bin/uvicorn api.main:app --port 8000
-```
-
-**AI without an API key.** The API uses the Claude Code CLI (`claude -p`) if it is installed and
-logged in on the machine, so a Claude subscription is enough for a local demo. It counts against
-that subscription's limits and takes 2–6 seconds per call. Set `ANTHROPIC_API_KEY` (and
-`HEATMATCH_AI=api`) to use the Anthropic API instead; anything other people use needs that.
-With neither, the app still works: keyword-based assistant, CSV-only uploads, template letters.
+To regenerate the data, install `numpy pandas shapely pyproj requests pyarrow openpyxl` in your
+virtual environment and run `python symbiocity.py` from the repo root. Install `pytest` and
+run `python -m pytest -q tests` to run the Python tests.
 
 Demo keys: **c** opens NYCHA Fulton Houses (Con Ed's Chelsea pilot site) in the Data centers tab, **o** zooms back out to the city.
 
@@ -178,5 +168,5 @@ pipeline/            config, fetch, clean, profiles, match, streets (real street
 tests/               coincidence / storage / energy-conservation tests
 web/                 Vite + React + deck.gl + MapLibre demo (reads web/public/data/*.json)
 api/                 FastAPI app (api.main): proposal letters, bill/usage file reading, voice-assistant intent;
-                     api/ai.py reaches Claude through the Claude Code CLI or the Anthropic API
+                     api/ai.py uses the Claude Messages API, api/speech.py provides ElevenLabs audio
 ```

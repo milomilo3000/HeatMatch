@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { loadIndex, searchIndex, roleLabel, roleClass } from "./search.js";
 
-export default function SearchBar({ onPick, onClear, value, onAsk, asking }) {
+export default function SearchBar({ onPick, onClear, value, onAsk, asking, demoLogin }) {
   const [text, setText] = useState("");
   const [index, setIndex] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [hits, setHits] = useState([]);
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
@@ -15,7 +16,8 @@ export default function SearchBar({ onPick, onClear, value, onAsk, asking }) {
   function ensureIndex() {
     if (index || loading) return;
     setLoading(true);
-    loadIndex().then((ix) => { setIndex(ix); setLoading(false); });
+    setLoadFailed(false);
+    loadIndex().then(setIndex).catch(() => setLoadFailed(true)).finally(() => setLoading(false));
   }
 
   useEffect(() => {
@@ -65,9 +67,11 @@ export default function SearchBar({ onPick, onClear, value, onAsk, asking }) {
           <span>Ask</span>
         </button>
       )}
+      {demoLogin}
       {open && text.trim() && !asking && (
         <div className="search-menu">
           {loading && <div className="search-empty">Loading NYC buildings…</div>}
+          {loadFailed && <button type="button" className="search-row" onClick={ensureIndex}>Retry loading building search</button>}
           {!loading && index && !hits.length && (
             <div className="search-empty">No benchmarked building matches “{text}”. Try the street address.</div>
           )}

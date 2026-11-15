@@ -19,18 +19,26 @@ export function norm(text) {
     .filter(Boolean);
 }
 
-let cache = null;
-export async function loadIndex() {
-  if (cache) return cache;
+let indexRequest;
+
+async function fetchIndex() {
   const r = await fetch("/data/search.json");
+  if (!r.ok) throw new Error(`Building search data: ${r.status}`);
   const { cols, rows } = await r.json();
-  cache = rows.map((row) => {
+  return rows.map((row) => {
     const e = Object.fromEntries(cols.map((c, i) => [c, row[i]]));
     e.nameT = norm(e.name);
     e.addrT = norm(e.address);
     return e;
   });
-  return cache;
+}
+
+export function loadIndex() {
+  indexRequest ??= fetchIndex().catch((error) => {
+    indexRequest = undefined;
+    throw error;
+  });
+  return indexRequest;
 }
 
 // A query word matches a building word by prefix, except finished numbers ("111 ...") must match

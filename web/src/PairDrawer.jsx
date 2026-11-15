@@ -62,6 +62,10 @@ export function buildFacts(data, grids, pair, filters, e) {
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
   const gs = grids?.[pair.s], gk = grids?.[pair.k];
   return {
+    ...(data.summary.demo && { scenario: {
+      label: "Illustrative higher-efficiency demo", heat_pump_cop: data.summary.assumptions.hp_cop,
+      waste_heat_capture_pct: +(100 * data.summary.assumptions.capture_eff).toFixed(1),
+    } }),
     source: { name: s.name, address: s.address, borough: s.borough, type: s.type, role: sourceLabel(s, pair.track),
       is_data_center: pair.track === "dc",
       owner: s.owner, cooling_towers: s.towers, data_center_share_of_electricity: s.dc_share },
@@ -74,7 +78,6 @@ export function buildFacts(data, grids, pair, filters, e) {
       heat_pump_electricity_usd: Math.round(e.elecUsd), cooling_tower_water_savings_usd: Math.round(e.waterUsd),
       ll97_penalty_avoided_usd: Math.round(e.ll97), total_value_usd: Math.round(e.value),
       installed_cost_range_usd: [Math.round(e.capexLow), Math.round(e.capexHigh)],
-      payback_range_years: e.paybackLow ? [+e.paybackLow.toFixed(1), +e.paybackHigh.toFixed(1)] : null,
       sink_is_nycha_article_321: e.nycha },
     monthly_mmbtu: gs && gk ? {
       months: MONTHS,
@@ -87,14 +90,21 @@ export function buildFacts(data, grids, pair, filters, e) {
 function templateLetters(f) {
   const a = f.annual;
   const common = `${f.source.name} (${f.source.address}) and ${f.sink.name} (${f.sink.address}) are ${Math.round(f.link.distance_m)} m apart. ${f.link.tier}.`;
+  const netEnergy = a.fuel_savings_usd - a.heat_pump_electricity_usd;
+  const energyImpact = netEnergy < 0
+    ? `Heat-pump electricity would increase your net energy costs by about ${fmt.usd(-netEnergy)} per year.`
+    : `After heat-pump electricity, we estimate you would save ${fmt.usd(netEnergy)} per year on energy.`;
+  const scenarioNote = f.scenario ? `These figures use the illustrative demo assumptions of heat-pump COP ${f.scenario.heat_pump_cop} and ${f.scenario.waste_heat_capture_pct}% waste-heat capture.\n\n` : "";
   return `TO: ${f.source.owner || "Owner"} — ${f.source.name}
-RE: Turning your cooling-tower heat into revenue
+RE: Reducing cooling-tower costs
+
+${scenarioNote}Sharing waste heat could save your building about ${fmt.usd(a.cooling_tower_water_savings_usd)} per year in cooling-tower water and chemical costs and could open a heat-sale income stream.
 
 ${common}
 
 Your building (${f.source.role.toLowerCase()}) rejects heat to the sky through its cooling equipment. Your neighbor burns ${f.sink.heats_with} to make ${f.link.serves}. Public data (NYC LL84 2024, the DOHMH cooling-tower registry) shows the two loads overlap ${Math.round(f.link.hour_overlap * 100)}% hour by hour.
 
-A heat link could move about ${a.heat_reused_mmbtu.toLocaleString()} MMBtu a year. On your side that cuts cooling-tower water and chemical use (about $${a.cooling_tower_water_savings_usd.toLocaleString()}/yr) and opens a heat-sale income stream.
+A heat link could move about ${a.heat_reused_mmbtu.toLocaleString()} MMBtu a year.
 
 Next step: a 30-minute call and a joint feasibility study.
 
@@ -103,11 +113,13 @@ Next step: a 30-minute call and a joint feasibility study.
 TO: ${f.sink.owner || "Owner"} — ${f.sink.name}
 RE: Cutting your ${f.sink.heats_with} bill and LL97 exposure with your neighbor's waste heat
 
+${scenarioNote}${energyImpact}${a.ll97_penalty_avoided_usd > 0 ? ` The link could also avoid about ${fmt.usd(a.ll97_penalty_avoided_usd)} per year in modeled LL97 penalties.` : ""}
+
 ${common}
 
-Recovered heat could cover ${Math.round(f.link.share_of_sink_demand_covered * 100)}% of your ${f.link.serves} demand, avoiding about ${a.tco2e_avoided.toLocaleString()} tCO2e a year${a.sink_is_nycha_article_321 ? " (helping meet NYCHA's LL97 Article 321 obligations)" : `, roughly $${a.ll97_penalty_avoided_usd.toLocaleString()}/yr of LL97 penalty exposure at $268/t`}, plus $${(a.fuel_savings_usd - a.heat_pump_electricity_usd).toLocaleString()}/yr in net energy savings.
+Recovered heat could cover ${Math.round(f.link.share_of_sink_demand_covered * 100)}% of your ${f.link.serves} demand, avoiding about ${a.tco2e_avoided.toLocaleString()} tCO2e a year${a.sink_is_nycha_article_321 ? " (helping meet NYCHA's LL97 Article 321 obligations)" : ""}.
 
-Estimated installed cost is $${(a.installed_cost_range_usd[0] / 1e6).toFixed(1)}M–$${(a.installed_cost_range_usd[1] / 1e6).toFixed(1)}M${a.payback_range_years ? `, with a simple payback of ${a.payback_range_years[0]}–${a.payback_range_years[1]} years` : ""}. These are screening numbers from public data and need an engineering study to confirm.
+Estimated installed cost is ${fmt.usdRange(...a.installed_cost_range_usd)}. These are screening numbers from public data and need an engineering study to confirm.
 
 — HeatMatch NYC (screening estimate, not an engineering design)`;
 }
@@ -134,6 +146,11 @@ export default function PairDrawer({
     const facts = buildFacts(data, grids, pair, filters, e);
     try {
       const r = await fetch("/api/proposal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(facts) });
+      if (r.status === 401) {
+        setLetter(templateLetters(facts));
+        setNote("Template shown. Use Demo login to unlock AI drafting.");
+        return;
+      }
       if (!r.ok || !r.body) throw new Error(`API ${r.status}`);
       const reader = r.body.getReader();
       const dec = new TextDecoder();

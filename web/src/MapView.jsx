@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Map, { useControl } from "react-map-gl/maplibre";
 import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { PolygonLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
 import { KIND_LABEL, FUEL_LABEL } from "./econ.js";
 import { nearestWalls, midpoint, footprintRadius } from "./pipe.js";
+import { INITIAL } from "./mapCamera.js";
 
 function shortLabel(name, max = 20) {
   const n = String(name || "").trim();
@@ -27,7 +29,6 @@ const SRC_RGB = [255, 140, 40];
 const SNK_RGB = [70, 165, 255];
 const GREY = [70, 76, 92, 200];
 const STYLE = "https://tiles.openfreemap.org/styles/dark";
-export const INITIAL = { longitude: -73.975, latitude: 40.735, zoom: 11.6, pitch: 45, bearing: -29 };
 const LOOP = 1000;
 const TRIP = 420;
 const PARTICLES = 3;
@@ -71,15 +72,13 @@ function arcPath(s, k) {
 }
 
 export default function MapView({
-  mapRef, data, grids, pairs, mode, tab, focus, partners, selected, chain, onSelect, onPickBuilding,
-  hoverId, onHoverBuilding,
-  hour, month, heatMode, storage, flowMax,
+  mapRef, data, pairs, mode, tab, focus, partners, selected, chain, onReady, onSelect, onPickBuilding,
+  hoverId, onHoverBuilding, heatMode,
 }) {
   const [time, setTime] = useState(0);
   const [zoom, setZoom] = useState(INITIAL.zoom);
   const searchMode = mode === "search";
   const isSrc = (b) => (tab === "dc" ? !!b.dc : !!b.source);
-  const srcGrid = tab === "dc" ? "dc" : "src";
 
   useEffect(() => {
     if (LITE) return;
@@ -94,7 +93,6 @@ export default function MapView({
   }, []);
 
   const get = (id) => data.buildings.get(id);
-  const idx = month * 24 + hour;
   // annual strength of a match (share of the user's heat need it covers), not the hour: investors look at the year
   const flowNow = (p) => Math.max(0.15, Math.min(1, p[`coverage_${heatMode}`] || 0));
 
@@ -218,6 +216,7 @@ export default function MapView({
   const hlPolys = useMemo(() => (anyHl ? polys.filter((d) => hl.color.has(d.b.id)) : []), [polys, hl, anyHl]);
 
   const trips = useMemo(() => {
+    if (LITE) return [];
     const out = [];
     for (const p of shown) {
       const path = arcPath(get(p.s), get(p.k));
@@ -270,7 +269,7 @@ export default function MapView({
       autoHighlight: true,
       highlightColor: [255, 255, 255, 70],
       onHover,
-      updateTriggers: { getFillColor: [idx, heatMode, active, anyHl, searchMode, !!grids, tab] },
+      updateTriggers: { getFillColor: [active, anyHl, searchMode, tab] },
       onClick: onBuildingClick,
     }),
     anyHl && new PolygonLayer({
@@ -311,7 +310,7 @@ export default function MapView({
       opacity: anyHl ? 0.35 : Math.max(0.35, Math.min(1, (14 - zoom) / 1.5)),
       pickable: true,
       onClick: ({ object }) => object && onSelect(object.id),
-      updateTriggers: { getFillColor: [idx, heatMode, flowMax] },
+      updateTriggers: { getFillColor: [heatMode] },
       parameters: { depthWriteEnabled: false },
     }),
 
@@ -326,7 +325,7 @@ export default function MapView({
       widthMinPixels: 1,
       pickable: true,
       onClick: ({ object }) => object && onSelect(object.id),
-      updateTriggers: { getColor: [idx, heatMode, selected, partnerSet, focusId, flowMax], getWidth: [selected] },
+      updateTriggers: { getColor: [heatMode, selected, partnerSet, focusId], getWidth: [selected] },
     }),
     !LITE && new TripsLayer({
       id: "heat-flow",
@@ -346,7 +345,7 @@ export default function MapView({
       trailLength: 160,
       currentTime: time,
       fadeTrail: true,
-      updateTriggers: { getColor: [idx, heatMode, flowMax, partnerSet, focusId, selected], getWidth: [idx, heatMode, flowMax, selected] },
+      updateTriggers: { getColor: [heatMode, partnerSet, focusId, selected], getWidth: [heatMode, selected] },
     }),
 
     // --- the proposed pipe at street level: one solid line with a soft, slowly breathing glow
@@ -445,7 +444,10 @@ export default function MapView({
       mapLib={maplibregl}
       mapStyle={STYLE}
       initialViewState={INITIAL}
-      onLoad={(e) => addContextBuildings(e.target)}
+      onLoad={(e) => {
+        addContextBuildings(e.target);
+        onReady();
+      }}
       onStyleData={(e) => e.target.isStyleLoaded() && addContextBuildings(e.target)}
       onZoomEnd={(e) => setZoom(e.viewState.zoom)}
       maxPitch={75}
