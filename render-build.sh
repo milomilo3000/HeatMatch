@@ -9,5 +9,4 @@ test -s web/dist/index.html
 test -s web/dist/data/summary.json
 echo "HeatMatch frontend ready"
 
-HF_HUB_DISABLE_IMPLICIT_TOKEN=1 HF_HUB_DISABLE_XET=1 \
-    python -c "from faster_whisper.utils import download_model; download_model('tiny.en', output_dir='.models/tiny.en')"
+python -m api.download_speech_model

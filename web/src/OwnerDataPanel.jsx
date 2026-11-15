@@ -1,4 +1,5 @@
 import React, { useRef, useState } from "react";
+import { apiFetch } from "./api.js";
 import { UNITS, FUEL_UNITS, buildOverride, parseCsvUsage, IT_HEAT_FACTOR } from "./owner.js";
 import { fmt, FUEL_LABEL, MONTHS } from "./econ.js";
 
@@ -58,7 +59,7 @@ export default function OwnerDataPanel({ building, grid, A, record, defaultKind,
     if (!file) return;
     setBusy(true); setFileNote(null); setError("");
     try {
-      const r = await fetch(`/api/extract-usage?filename=${encodeURIComponent(file.name)}&kind=${kind === "dc" ? "data_center" : "heat_user"}`,
+      const r = await apiFetch(`/api/extract-usage?filename=${encodeURIComponent(file.name)}&kind=${kind === "dc" ? "data_center" : "heat_user"}`,
         { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
       const out = await r.json().catch(() => ({}));
       if (r.status === 401) throw new Error("use Demo login to unlock AI file reading");

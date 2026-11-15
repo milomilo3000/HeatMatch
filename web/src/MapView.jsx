@@ -433,8 +433,8 @@ export default function MapView({
         ? `Gives away heat (${KIND_LABEL[b.source] || "source"})`
         : `Needs heat (${FUEL_LABEL[b.fuel] || "fossil fuel"})`;
     return {
-      html: `<b>${b.name}</b><br/>${b.type}<br/><span style="opacity:.75">${role}</span>`,
-      style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3", fontFamily: "Inter, sans-serif", fontSize: "12px" },
+      text: `${b.name}\n${b.type}\n${role}`,
+      style: { background: "#0e121c", border: "1px solid rgba(255,255,255,.12)", borderRadius: "8px", padding: "8px 10px", color: "#e8ecf3", fontFamily: "Inter, sans-serif", fontSize: "12px", whiteSpace: "pre-line" },
     };
   };
 

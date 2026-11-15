@@ -6,15 +6,21 @@ letter if this endpoint is unreachable, so the demo never blocks on it.
 """
 from __future__ import annotations
 
+import asyncio
 import json
-from contextlib import AsyncExitStack
+import logging
+import os
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 
 import anthropic
 from fastapi import Depends, FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import ai
 from .demo_login import require_demo_login
+from .download_speech_model import download_model
+from .transcription import VOSK_MODEL, prepare_model, speech_model_path
 
 MAX_FACTS_BYTES = 20_000
 
@@ -43,12 +49,35 @@ Rules:
 - Plain text, no markdown headings or bold. Separate the two letters with a line containing only "---".
 - Sign each letter "HeatMatch NYC"."""
 
-app = FastAPI(title="HeatMatch API")
+async def warm_speech():
+    try:
+        await run_in_threadpool(download_model)
+        await run_in_threadpool(prepare_model, VOSK_MODEL)
+    except (OSError, RuntimeError):
+        logging.getLogger(__name__).exception("Could not warm the hosted microphone model")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    warmup = asyncio.create_task(warm_speech()) if os.environ.get("RENDER") == "true" else None
+    app.state.speech_warmup = warmup
+    try:
+        yield
+    finally:
+        if warmup:
+            warmup.cancel()
+            with suppress(asyncio.CancelledError):
+                await warmup
+
+
+app = FastAPI(title="HeatMatch API", lifespan=lifespan)
 
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "backend": ai.backend(), "api_model": ai.model()}
+    speech_model = speech_model_path()
+    return {"ok": True, "backend": ai.backend(), "api_model": ai.model(),
+            "transcription_model": speech_model.name if speech_model else None}
 
 
 @app.post("/api/proposal", dependencies=[Depends(require_demo_login)])

@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from api import demo_login
+from api import demo_login, proposal
 from api.main import app
 
 
@@ -53,3 +53,35 @@ def test_no_demo_password_keeps_provider_routes_locked(monkeypatch):
     with TestClient(app) as client:
         assert client.post("/api/demo/login", json={"password": "demo"}).status_code == 503
         assert client.post("/api/assistant", json={"text": "Find a match."}).status_code == 401
+
+
+def test_public_site_can_sign_in_without_third_party_cookies(monkeypatch):
+    async def skip_warmup():
+        return None
+
+    monkeypatch.setenv("HEATMATCH_DEMO_PASSWORD", "test-demo-password")
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setattr(proposal, "warm_speech", skip_warmup)
+    origin = "https://heatmatch.us"
+    backend = f"https://{demo_login.PUBLIC_API_HOST}"
+    with TestClient(app, base_url=backend) as client:
+        preflight = client.options("/api/transcribe", headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        })
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == origin
+        login = client.post("/api/demo/login", headers={"Origin": origin},
+                            json={"password": "test-demo-password"})
+        assert login.status_code == 200
+        assert "set-cookie" not in login.headers
+        token = login.json()["token"]
+        headers = {"Origin": origin, "Authorization": f"Bearer {token}"}
+        assert client.get("/api/demo/session", headers=headers).json()["authenticated"]
+        assert client.post("/api/assistant", headers=headers, json={"text": ""}).status_code == 400
+        assert client.post("/api/transcribe", headers={"Origin": origin}).status_code == 401
+        assert client.post("/api/transcribe", headers={**headers, "Content-Type": "audio/webm"}).status_code == 400
+        headers["Origin"] = "https://other.example"
+        assert client.post("/api/assistant", headers=headers, json={"text": ""}).status_code == 401
+        assert client.post("/api/demo/login", headers=headers, json={"password": "test-demo-password"}).status_code == 403

@@ -45,12 +45,11 @@ export default function App() {
   const [error, setError] = useState(null);
   const [owner, setOwner] = useState(loadOwner);
   const [ownerOpen, setOwnerOpen] = useState(false);
-  const [demo, setDemo] = useState(() => new URLSearchParams(window.location.search).get("demo") === "1");
   const { data, grids } = useMemo(() => {
-    if (!rawData || !demo) return applyOwner(rawData, rawGrids, owner);
+    if (!rawData) return applyOwner(rawData, rawGrids, owner);
     const summary = { ...rawData.summary, demo: true, assumptions: demoAssumptions(rawData.summary.assumptions) };
     return applyOwner({ ...rawData, summary }, rawGrids, owner);
-  }, [rawData, rawGrids, owner, demo]);
+  }, [rawData, rawGrids, owner]);
 
   const [askOpen, setAskOpen] = useState(false);
   const [askBusy, setAskBusy] = useState(false);
@@ -297,14 +296,6 @@ export default function App() {
     else if (focus) flyToPoints([focus, ...partnerRows.slice(0, 8).map((r) => r.other)]);
   }
 
-  function toggleDemo() {
-    const url = new URL(window.location.href);
-    if (demo) url.searchParams.delete("demo");
-    else url.searchParams.set("demo", "1");
-    window.history.replaceState(null, "", url);
-    setDemo(!demo);
-  }
-
   useEffect(() => {
     function onKey(e) {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName) || !data) return;
@@ -380,10 +371,9 @@ export default function App() {
               Citywide
             </button>
           </div>
-          <button type="button" className="scenario-toggle" aria-pressed={demo} onClick={toggleDemo}
-            title="Compare the baseline with a heat pump that uses less electricity for the same heat delivery">
-            {demo ? `Demo estimate · COP ${A.hp_cop} · ${(100 * A.capture_eff).toFixed(1)}% capture` : "Demo estimates"}
-          </button>
+          <span className="scenario-label" title="Illustrative heat-pump efficiency and waste-heat capture">
+            Demo estimates · COP {A.hp_cop} · {(100 * A.capture_eff).toFixed(1)}% capture
+          </span>
         </div>
       </header>
 
@@ -421,7 +411,7 @@ export default function App() {
 
       {searchMode && focus && selected && (
         <PairDrawer
-          key={`${selected.id}:${demo}`}
+          key={selected.id}
           data={data}
           grids={grids}
           pair={selected}
@@ -468,7 +458,7 @@ export default function App() {
 
       {!searchMode && selected && (
         <PairDrawer
-          key={`${selected.id}:${demo}`}
+          key={selected.id}
           data={data}
           grids={grids}
           pair={selected}

@@ -12,11 +12,12 @@ search, CSV import and proposal templates. Speech uses ELEVENLABS_API_KEY.
 """
 from pathlib import Path
 
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import ai
 from .assistant import router as assistant_router
-from .demo_login import router as demo_router
+from .demo_login import PUBLIC_ORIGINS, router as demo_router
 from .proposal import app
 from .speech import router as speech_router
 from .transcription import router as transcription_router
@@ -27,6 +28,8 @@ app.include_router(assistant_router)
 app.include_router(speech_router)
 app.include_router(transcription_router)
 app.include_router(demo_router)
+app.add_middleware(CORSMiddleware, allow_origins=PUBLIC_ORIGINS, allow_methods=["GET", "POST"],
+                   allow_headers=["Authorization", "Content-Type"])
 
 
 @app.get("/api/ai")

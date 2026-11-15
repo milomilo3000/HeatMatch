@@ -1,6 +1,8 @@
 // The voice assistant's "intent": what the owner asked for, as filters the app can run.
 // Claude produces it (POST /api/assistant); parseOffline is the no-AI fallback.
 
+import { apiFetch } from "./api.js";
+
 export const TYPE_LABEL = {
   hotel: "hotels", apartments: "apartment buildings", office: "office buildings", school: "schools",
   hospital: "hospitals and labs", grocery: "grocery and cold-storage buildings", gym: "gyms", data_center: "data centers",
@@ -101,7 +103,7 @@ export function parseOffline(text, previous, focusName) {
 export async function getIntent({ text, tab, focusName, previous }) {
   const includePayback = asksForPayback(text);
   try {
-    const r = await fetch("/api/assistant", {
+    const r = await apiFetch("/api/assistant", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, tab, focus_name: focusName, previous }),
     });

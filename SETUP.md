@@ -26,7 +26,7 @@ test -f .env || cp .env.example .env
 
 Set `ANTHROPIC_API_KEY` in the root `.env` for Claude-powered search, bill extraction, and proposal drafting. Set `ANTHROPIC_WORKSPACE_ID` if your key requires a workspace header. With an empty key, HeatMatch uses keyword search, CSV import, and proposal templates. Restart the API after edits.
 
-Set `HEATMATCH_DEMO_PASSWORD` in the same file with a strong, unique password and restart the API. In HeatMatch, click **Demo login** and enter that password to unlock the paid AI features for eight hours. Share the demo password with the people running the demo. Changing the password and restarting the API invalidates prior sessions. Public deployments should serve the site and its API on the same HTTPS origin.
+Set `HEATMATCH_DEMO_PASSWORD` in the same file with a strong, unique password and restart the API. In HeatMatch, click **Demo login** and enter that password to unlock the paid AI features for eight hours. Share the demo password with the people running the demo. Changing the password and restarting the API invalidates prior sessions.
 
 ## 2. Open the website
 
@@ -42,7 +42,7 @@ npm run dev
 
 Run `npm run build` from `web` to create or refresh `web/dist`. Restart the API once the build is ready. If the provider features fail, check [the API health endpoint](http://127.0.0.1:8000/api/health).
 
-Click **Demo estimates** or add `?demo=1` to the page URL for the higher-efficiency scenario. It assumes a heat-pump COP of 5 and 78.4% waste-heat capture at the same modeled heat delivery. The baseline uses COP 3.5 and 70% capture.
+The demo estimates assume a heat-pump COP of 5 and 78.4% waste-heat capture at the same modeled heat delivery. The baseline uses COP 3.5 and 70% capture.
 
 ## Deploy on Render
 
@@ -58,11 +58,11 @@ python -m uvicorn api.main:app --host 0.0.0.0 --port "$PORT" --forwarded-allow-i
 
 Set **Health Check Path** to `/api/health` and select **Manual Deploy → Clear build cache & deploy** after changing the build command. [Render deployment settings](https://render.com/docs/deploys)
 
-The Render build uses the smaller English `tiny.en` microphone model so it requires less memory and CPU. If a recording takes over 30 seconds to transcribe, type the question or try a shorter recording.
+The Render build uses the compact Vosk English microphone model for faster transcription on the free instance. The service's `/api/health` route reports the model it loaded. If a recording takes over 30 seconds to transcribe, type the question or try a shorter recording.
 
 Create a Render Web Service from this repo using the root `Dockerfile`, or connect `render.yaml` as a Blueprint. The service hosts the website and API on the same HTTPS origin. In the service's **Environment** settings set `HEATMATCH_DEMO_PASSWORD`, `ANTHROPIC_API_KEY`, and `ELEVENLABS_API_KEY`. Add `ANTHROPIC_WORKSPACE_ID` or `ELEVENLABS_VOICE_ID` if your keys require them.
 
-Verify the service's temporary URL before attaching the custom domain. Check that `/api/health` returns HTTP 200, a signed-out request to `/api/assistant` returns HTTP 401, and demo sign-in unlocks a sample search. [Render Docker deployment](https://render.com/docs/docker) · [Render environments](https://render.com/docs/configure-environment-variables)
+The existing `heatmatch.us` static service calls the API at `heatmatch-i54j.onrender.com`. The API accepts signed demo sessions from the two HeatMatch site origins. Provider keys and the password belong in the API service's environment. Check that `/api/health` returns HTTP 200, a signed-out request to `/api/assistant` returns HTTP 401, and demo sign-in unlocks a sample search. [Render Docker deployment](https://render.com/docs/docker) · [Render environments](https://render.com/docs/configure-environment-variables)
 
 ## 3. Enable ElevenLabs voice replies
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { apiFetch, setDemoToken } from "./api.js";
 
 const UNAVAILABLE = { authenticated: false, configured: false };
 
@@ -13,7 +14,7 @@ export default function DemoLogin() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/demo/session", { signal: controller.signal })
+    apiFetch("/api/demo/session", { signal: controller.signal })
       .then(async (response) => response.ok ? await response.json() : UNAVAILABLE)
       .then(setSession)
       .catch(() => { if (!controller.signal.aborted) setSession(UNAVAILABLE); });
@@ -37,7 +38,7 @@ export default function DemoLogin() {
     setBusy(true);
     setError("");
     try {
-      const response = await fetch(`/api/demo/${action}`, {
+      const response = await apiFetch(`/api/demo/${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(action === "login" ? { password } : {}),
@@ -46,6 +47,7 @@ export default function DemoLogin() {
       if (!response.ok || typeof result?.authenticated !== "boolean") {
         throw new Error(typeof result?.detail === "string" ? result.detail : "Demo sign-in is unavailable.");
       }
+      setDemoToken(result.token);
       setSession(result);
       close();
     } catch (failure) {

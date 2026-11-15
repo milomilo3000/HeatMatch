@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { apiFetch } from "./api.js";
 
 const CAN_RECORD = typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!window.MediaRecorder;
 const MAX_RECORDING_MS = 15_000;
@@ -65,7 +66,7 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
 
     async function loadSpeech() {
       try {
-        const response = await fetch("/api/speech", {
+        const response = await apiFetch("/api/speech", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: reply.text }),
@@ -153,7 +154,7 @@ export default function AssistantPanel({ log, busy, onAsk, onClose, muted, setMu
         try {
           const clip = new Blob(chunks, { type: recorder.mimeType || chunks[0]?.type });
           if (!clip.size) throw new Error("No microphone audio was captured. Try recording again.");
-          const response = await fetch("/api/transcribe", {
+          const response = await apiFetch("/api/transcribe", {
             method: "POST", body: clip, signal: AbortSignal.any([signal, timeout]),
           });
           const result = await response.json().catch(() => null);

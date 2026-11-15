@@ -62,8 +62,7 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 .mode-switch button.on { background: rgba(255, 122, 26, 0.18); color: var(--text); }
 .mode-switch button:hover:not(.on) { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 .top-controls { display: grid; justify-items: end; gap: 6px; }
-.scenario-toggle { padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-solid); color: var(--muted); font-size: 11px; white-space: nowrap; }
-.scenario-toggle[aria-pressed="true"] { color: var(--text); border-color: var(--heat); }
+.scenario-label { padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-solid); color: var(--muted); font-size: 11px; white-space: nowrap; }
 
 .empty-tip { position: absolute; left: 16px; top: 84px; width: min(300px, calc(100vw - 32px)); z-index: 6; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; backdrop-filter: blur(8px); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); }
 .empty-tip.compact p { margin: 0 0 12px; color: var(--text); line-height: 1.4; font-size: 13.5px; }

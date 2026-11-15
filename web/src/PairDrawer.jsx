@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { apiFetch } from "./api.js";
 import PipeCard from "./PipeCard.jsx";
 import { pairEcon, gridVal, demandAt, srcKey, sourceLabel, fmt, FUEL_LABEL, MONTHS } from "./econ.js";
 import { ROUTE, crossingText, routeLine } from "./pipe.js";
@@ -145,7 +146,7 @@ export default function PairDrawer({
     setBusy(true); setLetter(""); setNote("");
     const facts = buildFacts(data, grids, pair, filters, e);
     try {
-      const r = await fetch("/api/proposal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(facts) });
+      const r = await apiFetch("/api/proposal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(facts) });
       if (r.status === 401) {
         setLetter(templateLetters(facts));
         setNote("Template shown. Use Demo login to unlock AI drafting.");
