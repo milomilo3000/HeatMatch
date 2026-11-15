@@ -63,10 +63,6 @@ export function buildFacts(data, grids, pair, filters, e) {
   const s = data.buildings.get(pair.s), k = data.buildings.get(pair.k);
   const gs = grids?.[pair.s], gk = grids?.[pair.k];
   return {
-    ...(data.summary.demo && { scenario: {
-      label: "Illustrative higher-efficiency demo", heat_pump_cop: data.summary.assumptions.hp_cop,
-      waste_heat_capture_pct: +(100 * data.summary.assumptions.capture_eff).toFixed(1),
-    } }),
     source: { name: s.name, address: s.address, borough: s.borough, type: s.type, role: sourceLabel(s, pair.track),
       is_data_center: pair.track === "dc",
       owner: s.owner, cooling_towers: s.towers, data_center_share_of_electricity: s.dc_share },
@@ -95,11 +91,10 @@ function templateLetters(f) {
   const energyImpact = netEnergy < 0
     ? `Heat-pump electricity would increase your net energy costs by about ${fmt.usd(-netEnergy)} per year.`
     : `After heat-pump electricity, we estimate you would save ${fmt.usd(netEnergy)} per year on energy.`;
-  const scenarioNote = f.scenario ? `These figures use the illustrative demo assumptions of heat-pump COP ${f.scenario.heat_pump_cop} and ${f.scenario.waste_heat_capture_pct}% waste-heat capture.\n\n` : "";
   return `TO: ${f.source.owner || "Owner"} — ${f.source.name}
 RE: Reducing cooling-tower costs
 
-${scenarioNote}Sharing waste heat could save your building about ${fmt.usd(a.cooling_tower_water_savings_usd)} per year in cooling-tower water and chemical costs and could open a heat-sale income stream.
+Sharing waste heat could save your building about ${fmt.usd(a.cooling_tower_water_savings_usd)} per year in cooling-tower water and chemical costs and could open a heat-sale income stream.
 
 ${common}
 
@@ -114,7 +109,7 @@ Next step: a 30-minute call and a joint feasibility study.
 TO: ${f.sink.owner || "Owner"} — ${f.sink.name}
 RE: Cutting your ${f.sink.heats_with} bill and LL97 exposure with your neighbor's waste heat
 
-${scenarioNote}${energyImpact}${a.ll97_penalty_avoided_usd > 0 ? ` The link could also avoid about ${fmt.usd(a.ll97_penalty_avoided_usd)} per year in modeled LL97 penalties.` : ""}
+${energyImpact}${a.ll97_penalty_avoided_usd > 0 ? ` The link could also avoid about ${fmt.usd(a.ll97_penalty_avoided_usd)} per year in modeled LL97 penalties.` : ""}
 
 ${common}
 

@@ -38,7 +38,7 @@ and share of demand covered as supporting details.
 
 Rules:
 - Omit payback, break-even timelines, and any estimate of how long it takes to recover the installed cost.
-- If the facts include a scenario, identify the numbers in both letters as illustrative demo estimates and give the stated efficiency and capture assumptions.
+- Describe projected savings as estimates. Omit demo labels and scenario assumptions from the letters.
 - If source.is_data_center is true, explain that steady IT waste heat makes it a reliable heat supply.
   Say whether the heat figure comes from a measured IT load or an estimate (source.role tells you).
 - Use only numbers that appear in the facts. Round sensibly. Never invent figures, names or programs.
@@ -91,6 +91,7 @@ async def proposal(request: Request):
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
     if not isinstance(facts, dict):
         return JSONResponse({"error": "expected a JSON object of pair facts"}, status_code=400)
+    facts.pop("scenario", None)
     annual = facts.get("annual")
     if isinstance(annual, dict):
         annual.pop("payback_range_years", None)

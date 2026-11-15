@@ -232,9 +232,8 @@ export default function App() {
     const ranking = intent.sort === "savings" ? "" : ` ranks first for ${SORT_LABEL[intent.sort]} and`;
     const cost = intent.sort === "cheapest" ? ` It would cost an estimated ${sayCost(best.e.capexLow, best.e.capexHigh)} to build.` : "";
     const payback = pending.includePayback ? ` ${sayPayback(best.e.paybackLow, best.e.paybackHigh)}` : "";
-    const scenario = data.summary.demo ? "Under the demo assumptions, " : "";
     say(`I found ${partnerRows.length} ${partnerRows.length === 1 ? kindsTxt.replace(/s\b/g, "") : kindsTxt} ${where}. `
-      + `${scenario}${best.other.name}${ranking} ${saySavings(best.e.value)}.${cost}${payback}`, pending);
+      + `${best.other.name}${ranking} ${saySavings(best.e.value)}.${cost}${payback}`, pending);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerRows, intent, focus]);
 
