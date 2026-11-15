@@ -46,6 +46,18 @@ Click **Demo estimates** or add `?demo=1` to the page URL for the higher-efficie
 
 ## Deploy on Render
 
+For an existing **Python Web Service**, leave **Root Directory** blank and set its build and start commands in **Settings**. A Git push can trigger a deploy with the service's current commands, so update these settings before deploying.
+
+```bash
+# Build Command
+python -m pip install -r requirements.txt && npm --prefix web ci && npm --prefix web run build && python -c "from faster_whisper.utils import download_model; download_model('base.en', output_dir='.models/base.en')"
+
+# Start Command
+python -m uvicorn api.main:app --host 0.0.0.0 --port "$PORT" --forwarded-allow-ips '*'
+```
+
+Set **Health Check Path** to `/api/health` and select **Manual Deploy → Clear build cache & deploy** after changing the build command. [Render deployment settings](https://render.com/docs/deploys)
+
 Create a Render Web Service from this repo using the root `Dockerfile`, or connect `render.yaml` as a Blueprint. The service hosts the website and API on the same HTTPS origin. In the service's **Environment** settings set `HEATMATCH_DEMO_PASSWORD`, `ANTHROPIC_API_KEY`, and `ELEVENLABS_API_KEY`. Add `ANTHROPIC_WORKSPACE_ID` or `ELEVENLABS_VOICE_ID` if your keys require them.
 
 Verify the service's temporary URL before attaching the custom domain. Check that `/api/health` returns HTTP 200, a signed-out request to `/api/assistant` returns HTTP 401, and demo sign-in unlocks a sample search. [Render Docker deployment](https://render.com/docs/docker) · [Render environments](https://render.com/docs/configure-environment-variables)

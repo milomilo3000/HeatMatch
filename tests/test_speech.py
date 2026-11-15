@@ -1,11 +1,12 @@
 import json
+from io import BytesIO
+from urllib.parse import parse_qs, urlsplit
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from api import speech
 from api.main import app
-from api.speech import DEFAULT_VOICE
 
 
 @pytest.fixture
@@ -19,19 +20,33 @@ def signed_in(monkeypatch):
 def test_speech_returns_elevenlabs_mp3(monkeypatch, signed_in):
     monkeypatch.setenv("ELEVENLABS_API_KEY", "voice-test-key")
     monkeypatch.delenv("ELEVENLABS_VOICE_ID", raising=False)
-    client_factory = httpx.AsyncClient
 
-    def handle(request):
-        assert request.url.host == "api.elevenlabs.io"
-        assert request.url.path == f"/v1/text-to-speech/{DEFAULT_VOICE}"
-        assert request.url.params["output_format"] == "mp3_44100_128"
-        assert request.headers["xi-api-key"] == "voice-test-key"
-        assert json.loads(request.content) == {"text": "A heat match.", "model_id": "eleven_flash_v2_5"}
-        return httpx.Response(200, content=b"mock MP3", headers={"content-type": "audio/mpeg"})
+    class AudioResponse(BytesIO):
+        status = 200
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **options: client_factory(
-        **options, transport=httpx.MockTransport(handle)
-    ))
+        def getheader(self, name, default=None):
+            return "audio/mpeg" if name == "Content-Type" else default
+
+    class MockConnection:
+        def __init__(self, host, timeout):
+            assert host == "api.elevenlabs.io"
+            assert timeout == 15
+
+        def request(self, method, target, body, headers):
+            path = urlsplit(target)
+            assert method == "POST"
+            assert path.path == f"/v1/text-to-speech/{speech.DEFAULT_VOICE}"
+            assert parse_qs(path.query) == {"output_format": ["mp3_44100_128"]}
+            assert headers["xi-api-key"] == "voice-test-key"
+            assert json.loads(body) == {"text": "A heat match.", "model_id": "eleven_flash_v2_5"}
+
+        def getresponse(self):
+            return AudioResponse(b"mock MP3")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(speech, "HTTPSConnection", MockConnection)
     response = signed_in.post("/api/speech", json={"text": " A heat match. "})
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/mpeg"
